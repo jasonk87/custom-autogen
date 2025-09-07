@@ -205,6 +205,27 @@ def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any]], ma
             # Fallback to the first agent if something goes wrong
             return agents[0]
 
+        # Streaming callback setup
+        msg_id_store = {}
+        def on_stream_message_callback(is_first: bool, is_last: bool, chunk: object, sender: ConversableAgent, recipient: ConversableAgent):
+            sender_name = sender.name
+            msg_id = msg_id_store.get(sender_name)
+
+            if is_first:
+                msg_id = f"m_{time.time()}_{sender_name}"
+                msg_id_store[sender_name] = msg_id
+                out_q.put(json.dumps({"type": "stream_start", "id": msg_id, "sender": sender_name}))
+
+            if chunk and hasattr(chunk, "choices") and chunk.choices:
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    out_q.put(json.dumps({"type": "token", "id": msg_id, "delta": delta}))
+
+            if is_last:
+                out_q.put(json.dumps({"type": "stream_end", "id": msg_id}))
+                if sender_name in msg_id_store:
+                    del msg_id_store[sender_name]
+
         # Create agents
         autogen_agents: List[ConversableAgent] = []
 
@@ -224,29 +245,18 @@ def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any]], ma
             agent = ConversableAgent(
                 name=agent_cfg["name"],
                 system_message=agent_cfg.get("system") or f"You are a helpful assistant named {agent_cfg['name']}",
-                llm_config={**llm_config, "temperature": float(agent_cfg.get("temperature", 0.7))},
+                llm_config={
+                    **llm_config,
+                    "stream": True,
+                    "temperature": float(agent_cfg.get("temperature", 0.7))
+                },
                 human_input_mode="NEVER",
             )
-            autogen_agents.append(agent)
-
-        # Streaming callback
-        def on_message_callback(recipient, messages, sender, config):
-            last_message = messages[-1]
-            sender_name = sender.name
-
-            msg_id = f"m_{time.time()}_{sender_name}"
-            out_q.put(json.dumps({"type": "stream_start", "id": msg_id, "sender": sender_name}))
-            out_q.put(json.dumps({"type": "token", "id": msg_id, "delta": last_message.get("content", "")}))
-            out_q.put(json.dumps({"type": "stream_end", "id": msg_id}))
-
-            return False, None
-
-        for agent in autogen_agents:
-            agent.register_reply(
-                [ConversableAgent, UserProxyAgent],
-                reply_func=on_message_callback,
-                trigger="on_receive",
+            agent.register_streaming_reply(
+                trigger=ConversableAgent,
+                reply_func=on_stream_message_callback,
             )
+            autogen_agents.append(agent)
 
         # Set speaker selection method
         if manager_mode == "RoundRobin":
