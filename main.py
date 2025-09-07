@@ -6,7 +6,7 @@ Custom Agent Studio v10 — Manager-Directed + Thinking UI (Single File)
 - Directed flow enforces Build → Review → UX after an artifact appears.
 - Compact “Thinking UI”: client detects <think>…</think>, shows a collapsible dock, and auto-minimizes once normal output starts.
 Run:
-  pip install flask httpx werkzeug
+  pip install flask httpx werkzeug pyautogen
   python main.py
 Open:
   http://127.0.0.1:8080
@@ -29,6 +29,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from dataclasses import dataclass
 from typing import Any, Dict, Generator, List, Optional, Tuple
 
@@ -36,6 +37,7 @@ import httpx
 from flask import Flask, Response, jsonify, request, send_from_directory, render_template
 from werkzeug.serving import make_server
 from werkzeug.utils import secure_filename
+from autogen import ConversableAgent, UserProxyAgent, GroupChat, GroupChatManager
 
 # ===================== Directories & Config =====================
 
@@ -55,7 +57,7 @@ ALLOWED_UPLOAD_MIMES = {
 }
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", 10 * 1024 * 1024))  # 10 MB
 
-DEFAULT_MODEL = os.environ.get("DEFAULT_MODEL", "qwen3:8b")
+DEFAULT_MODEL = os.environ.get("DEFAULT_MODEL", "llama3.1:8b")
 
 COLLAB_GUIDANCE = (
     "Collaborate with the team. Do not try to solve the entire task alone. "
@@ -87,7 +89,6 @@ log.addHandler(_handler)
 # ===================== HTTPX Client & Ollama =====================
 
 def _make_httpx_client() -> httpx.Client:
-    # httpx doesn't expose urllib3.Retry; use sane timeouts & manual backoff in stream loop.
     return httpx.Client(timeout=httpx.Timeout(30.0, read=300.0))
 
 _http = _make_httpx_client()
@@ -144,15 +145,6 @@ state = AppState()
 
 # ===================== Utilities =====================
 
-TOOL_RE = re.compile(r"```tool:(?P<name>[a-zA-Z0-9_\-]+)\s*\n(?P<body>[\s\S]*?)```", re.M)
-CODE_FENCE_RE = re.compile(r"```(python|bash|json|[a-zA-Z0-9_\-]*)[\s\S]*?```", re.M)
-
-ROLE_HINTS = {
-    "programmer": {"keywords": ["programmer", "developer", "coder", "engineer"]},
-    "reviewer": {"keywords": ["critic", "review", "reviewer", "qa", "tester"]},
-    "ux": {"keywords": ["ux", "ui", "designer", "design"]},
-}
-
 def _safe_path(path: str) -> str:
     base = os.path.abspath(WORKSPACE_DIR)
     p = os.path.abspath(os.path.join(base, path))
@@ -176,355 +168,80 @@ def tree_listing(root: str) -> Dict[str, Any]:
         return node
     return walk(root_abs)
 
-# ===================== Built-in Tools & Plugins =====================
-
-def tool_listdir(path: str = ".") -> Dict[str, Any]:
-    p = _safe_path(path)
-    entries = []
-    for nm in sorted(os.listdir(p)):
-        fp = os.path.join(p, nm)
-        entries.append({"name": nm, "is_dir": os.path.isdir(fp)})
-    return {"cwd": os.path.relpath(p, WORKSPACE_DIR), "entries": entries}
-
-def tool_read_file(path: str) -> str:
-    with open(_safe_path(path), "r", encoding="utf-8") as f:
-        return f.read()
-
-def tool_write_file(path: str, content: str, overwrite: bool = True) -> str:
-    fp = _safe_path(path)
-    os.makedirs(os.path.dirname(fp), exist_ok=True)
-    if not overwrite and os.path.exists(fp):
-        raise FileExistsError("exists")
-    with open(fp, "w", encoding="utf-8") as f:
-        f.write(content)
-    return f"wrote {len(content)} bytes to {path}"
-
-def tool_delete(path: str) -> str:
-    fp = _safe_path(path)
-    if os.path.isdir(fp):
-        shutil.rmtree(fp)
-    else:
-        os.remove(fp)
-    return f"deleted {path}"
-
-TOOLS: Dict[str, Any] = {
-    "listdir": tool_listdir,
-    "read_file": tool_read_file,
-    "write_file": tool_write_file,
-    "delete": tool_delete,
-}
-
-def load_tool_plugins() -> None:
-    for fname in os.listdir(TOOLS_DIR):
-        if not fname.endswith(".py"):
-            continue
-        mod_path = os.path.join(TOOLS_DIR, fname)
-        spec = importlib.util.spec_from_file_location(f"tools_{fname[:-3]}", mod_path)
-        if not spec or not spec.loader:
-            continue
-        mod = importlib.util.module_from_spec(spec)
-        try:
-            spec.loader.exec_module(mod)  # type: ignore
-            added = 0
-            if hasattr(mod, "register"):
-                mod.register(TOOLS)  # type: ignore
-                added = -1
-            if hasattr(mod, "TOOLS"):
-                tools_map = getattr(mod, "TOOLS")
-                if isinstance(tools_map, dict):
-                    TOOLS.update(tools_map)
-                    added = len(tools_map)
-            log.info("loaded_tool_plugin", extra={"extra": {"file": fname, "added": added}})
-        except Exception as e:
-            log.error("tool_plugin_error", extra={"extra": {"file": fname, "error": str(e)}})
-
-load_tool_plugins()
-
-# ===================== Agents and Streaming =====================
-
-class Agent:
-    def __init__(self, name: str, system: str, temperature: float = 0.3):
-        self.name = name
-        self.system = system
-        self.temperature = temperature
-
-    def stream(self, history: List[Dict[str, str]], model: str) -> Generator[str, None, None]:
-        _, chat_url = get_ollama_endpoints()
-        roster = ", ".join(sorted({m.get("name") for m in history if m.get("name")} - {None})) or ""
-        sysmsg = self.system + "\n\n" + COLLAB_GUIDANCE + (f"\nTeam: {roster}" if roster else "")
-        messages = [{"role": "system", "content": sysmsg}] + history
-
-        attempts = 4
-        for attempt in range(attempts):
-            try:
-                with _http.stream(
-                    "POST",
-                    chat_url,
-                    json={
-                        "model": model,
-                        "messages": messages,
-                        "options": {"temperature": self.temperature},
-                        "stream": True,
-                    },
-                ) as r:
-                    r.raise_for_status()
-                    for line in r.iter_lines():
-                        if not line:
-                            continue
-                        try:
-                            data = json.loads(line)
-                        except Exception:
-                            continue
-                        msg = data.get("message") or {}
-                        delta = msg.get("content")
-                        if delta:
-                            yield delta
-                        if data.get("done") is True:
-                            return
-            except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.TransportError) as e:
-                if attempt == attempts - 1:
-                    raise
-                sleep_s = 0.5 * (2 ** attempt)
-                log.warning("ollama_stream_retry", extra={"extra": {"attempt": attempt + 1, "sleep": sleep_s, "err": str(e)}})
-                time.sleep(sleep_s)
-
-class HumanAdmin(Agent):
-    def __init__(self):
-        super().__init__(
-            "Human_Admin",
-            "You are the human. Provide brief feedback or code. Use TERMINATE to finish when satisfied.",
-        )
-
-    def stream(self, history: List[Dict[str, str]], model: str):  # type: ignore[override]
-        msg = state.user_input_q.get()
-        if msg is None:
-            return
-        if "```python" in (msg or ""):
-            code = msg.split("```python", 1)[1].split("```", 1)[0]
-            out = execute_python(code)
-            yield f"Executed code. Output:\n{out}"
-        else:
-            yield msg
-
-# ===================== Manager =====================
-
-class Manager:
-    """
-    Central controller that selects next speaker and decides termination.
-    Modes:
-      - RoundRobin: cycles through agents.
-      - Directed: stages: Build → Review → UX → Finalize; considers artifacts.
-      - Manual: waits for chooser input via /choose_next.
-    """
-
-    def __init__(self, names: List[str], mode: str = "Directed"):
-        self.names = names[:]  # includes Human_Admin
-        self.mode = mode
-        self._rr = 0
-        # tracking
-        self.last_artifact_turn = -1
-        self.has_reviewed_since_artifact = False
-        self.has_ux_since_artifact = False
-        self.turn = 0
-        # classify roles
-        self.roles: Dict[str, str] = {}
-        for n in self.names:
-            nl = n.lower()
-            role = "other"
-            if any(k in nl for k in ROLE_HINTS["programmer"]["keywords"]):
-                role = "programmer"
-            elif any(k in nl for k in ROLE_HINTS["reviewer"]["keywords"]):
-                role = "reviewer"
-            elif any(k in nl for k in ROLE_HINTS["ux"]["keywords"]):
-                role = "ux"
-            elif n == "Human_Admin":
-                role = "human"
-            self.roles[n] = role
-
-    def note_message(self, speaker: str, content: str) -> None:
-        # artifact signal
-        if CODE_FENCE_RE.search(content) or "tool:write_file" in content:
-            self.last_artifact_turn = self.turn
-            self.has_reviewed_since_artifact = False
-            self.has_ux_since_artifact = False
-        # stage flags
-        role = self.roles.get(speaker, "other")
-        if role == "reviewer" and self.last_artifact_turn >= 0:
-            self.has_reviewed_since_artifact = True
-        if role == "ux" and self.last_artifact_turn >= 0:
-            self.has_ux_since_artifact = True
-        self.turn += 1
-
-    def choose(self, history: List[Dict[str, str]]) -> Tuple[str, str]:
-        if self.mode == "Manual":
-            try:
-                who = state.manual_next_q.get(timeout=3600)
-                if who in self.names:
-                    return who, "manual selection"
-            except Exception:
-                pass
-            return "Human_Admin", "manual timeout fallback"
-
-        if self.mode == "RoundRobin":
-            pick = self.names[self._rr % len(self.names)]
-            self._rr += 1
-            return pick, "round-robin"
-
-        # Directed policy
-        prog = self._first_by_role("programmer")
-        rev = self._first_by_role("reviewer")
-        ux = self._first_by_role("ux")
-        human = "Human_Admin" if "Human_Admin" in self.names else None
-
-        if self.last_artifact_turn < 0 and prog:
-            return prog, "directed: build phase (no artifact yet)"
-
-        if self.last_artifact_turn >= 0:
-            if rev and not self.has_reviewed_since_artifact:
-                return rev, "directed: post-artifact review"
-            if ux and not self.has_ux_since_artifact:
-                return ux, "directed: post-artifact ux"
-
-        if prog:
-            return prog, "directed: refine"
-        if human:
-            return human, "directed: human check"
-
-        pick = self.names[self._rr % len(self.names)]
-        self._rr += 1
-        return pick, "directed: fallback round-robin"
-
-    def should_terminate(self) -> bool:
-        if self.mode != "Directed":
-            return False
-        if self.last_artifact_turn < 0:
-            return False
-        rev = self._first_by_role("reviewer")
-        ux = self._first_by_role("ux")
-        if rev and not self.has_reviewed_since_artifact:
-            return False
-        if ux and not self.has_ux_since_artifact:
-            return False
-        return True
-
-    def _first_by_role(self, role: str) -> Optional[str]:
-        for n in self.names:
-            if self.roles.get(n) == role:
-                return n
-        return None
-
 # ===================== Orchestrator =====================
-
-def default_system(name: str) -> str:
-    n = name.lower()
-    if any(k in n for k in ["programmer", "developer", "coder", "engineer"]):
-        return "You are a Python Developer. Focus on code and artifacts.\n" + COLLAB_GUIDANCE
-    if any(k in n for k in ["critic", "review", "reviewer", "qa", "tester"]):
-        return "You are a Code Reviewer. Critique and suggest precise fixes.\n" + COLLAB_GUIDANCE
-    if any(k in n for k in ["ux", "ui", "designer", "design"]):
-        return "You are a UX/UI Designer. Improve affordances, layout, naming, readability.\n" + COLLAB_GUIDANCE
-    return f"You are a collaborator named {name}.\n" + COLLAB_GUIDANCE
-
-def execute_python(code: str) -> str:
-    fp = os.path.join(WORKSPACE_DIR, f"tmp_{binascii.b2a_hex(os.urandom(4)).decode()}.py")
-    try:
-        with open(fp, "w", encoding="utf-8") as f:
-            f.write(code)
-        p = subprocess.run([sys.executable, fp], capture_output=True, text=True, timeout=60)
-        out = p.stdout
-        if p.stderr:
-            out += "\n--- STDERR ---\n" + p.stderr
-        return out
-    except Exception as e:
-        return f"exec error: {e}"
-    finally:
-        try:
-            os.remove(fp)
-        except Exception:
-            pass
 
 def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any]], manager_mode: str, out_q: "queue.Queue[str]", max_turns: int = 60):
     try:
-        history: List[Dict[str, str]] = []
-        agents: Dict[str, Agent] = {
-            cfg["name"]: Agent(
-                cfg["name"],
-                (cfg.get("system") or default_system(cfg["name"])),
-                temperature=float(cfg.get("temperature", 0.3)),
-            ) for cfg in agents_cfg
+        llm_config = {
+            "config_list": [{"model": model, "base_url": _ollama_host, "api_key": "ollama"}],
+            "cache_seed": None,
         }
-        agents["Human_Admin"] = HumanAdmin()
-        names = list(agents.keys())
-        mgr = Manager(names, manager_mode)
 
-        # Initial
-        history.append({"role": "user", "content": f"Goal: {goal}"})
+        # Custom get_human_input function
+        def custom_get_human_input(prompt: str) -> str:
+            out_q.put(json.dumps({"type": "status", "state": "waiting_for_input"}))
+            try:
+                message = state.user_input_q.get(timeout=3600)
+                if message is None or message == "exit":
+                    return "exit"
+                return message
+            except queue.Empty:
+                return "exit"
+
+        # Create agents
+        autogen_agents: List[ConversableAgent] = []
+
+        # User Proxy Agent
+        user_proxy = UserProxyAgent(
+            name="Human_Admin",
+            system_message="A human admin. Interact with the team to discuss the plan and delegate tasks. You can also execute code.",
+            human_input_mode="ALWAYS",
+            get_human_input=custom_get_human_input,
+            max_consecutive_auto_reply=10,
+            is_termination_msg=lambda x: x.get("content", "").rstrip().endswith("TERMINATE"),
+            code_execution_config={"work_dir": WORKSPACE_DIR, "use_docker": False},
+        )
+        autogen_agents.append(user_proxy)
+
+        for agent_cfg in agents_cfg:
+            agent = ConversableAgent(
+                name=agent_cfg["name"],
+                system_message=agent_cfg.get("system") or f"You are a helpful assistant named {agent_cfg['name']}",
+                llm_config={**llm_config, "temperature": float(agent_cfg.get("temperature", 0.7))},
+                human_input_mode="NEVER",
+            )
+            autogen_agents.append(agent)
+
+        # Streaming callback
+        def on_message_callback(recipient, messages, sender, config):
+            last_message = messages[-1]
+            sender_name = sender.name
+
+            msg_id = f"m_{time.time()}_{sender_name}"
+            out_q.put(json.dumps({"type": "stream_start", "id": msg_id, "sender": sender_name}))
+            out_q.put(json.dumps({"type": "token", "id": msg_id, "delta": last_message.get("content", "")}))
+            out_q.put(json.dumps({"type": "stream_end", "id": msg_id}))
+
+            return False, None
+
+        for agent in autogen_agents:
+            agent.register_reply(
+                [ConversableAgent, UserProxyAgent],
+                reply_func=on_message_callback,
+                trigger="on_receive",
+            )
+
+        groupchat = GroupChat(agents=autogen_agents, messages=[], max_round=max_turns)
+        manager = GroupChatManager(groupchat=groupchat, llm_config=llm_config)
+
         out_q.put(json.dumps({"type": "chat", "sender": "System", "message": f"Goal set: {goal}"}))
 
-        for turn in range(max_turns):
-            if state.stop_event.is_set():
-                break
-
-            next_name, rationale = mgr.choose(history)
-            if next_name not in agents:
-                out_q.put(json.dumps({"type": "chat", "sender": "Error", "message": f"Manager picked unknown agent: {next_name}"}))
-                break
-
-            out_q.put(json.dumps({"type": "chat", "sender": "Manager", "message": f"Next: {next_name}  ·  reason: {rationale}"}))
-
-            speaker = agents[next_name]
-            msg_id = f"t{turn}_{next_name}"
-
-            out_q.put(json.dumps({"type": "status", "state": "waiting_for_input" if isinstance(speaker, HumanAdmin) else "running"}))
-            out_q.put(json.dumps({"type": "stream_start", "id": msg_id, "sender": next_name}))
-
-            assembled: List[str] = []
-            try:
-                for delta in speaker.stream(history, model) or []:
-                    if state.stop_event.is_set():
-                        break
-                    assembled.append(delta)
-                    out_q.put(json.dumps({"type": "token", "id": msg_id, "delta": delta}))
-            except Exception as e:
-                out_q.put(json.dumps({"type": "chat", "sender": next_name, "message": f"[stream error] {e}"}))
-            finally:
-                out_q.put(json.dumps({"type": "stream_end", "id": msg_id}))
-
-            full_msg = ''.join(assembled)
-
-            # Ignore TERMINATE from non-human agents
-            if next_name != "Human_Admin" and "TERMINATE" in (full_msg or "").upper():
-                log.info("terminate_ignored", extra={"extra": {"by": next_name}})
-                full_msg = full_msg.replace("TERMINATE", "")
-
-            history.append({"role": "assistant", "name": next_name, "content": full_msg})
-            mgr.note_message(next_name, full_msg)
-
-            # Tool calls embedded in ```tool:name\n{...}```
-            for m in TOOL_RE.finditer(full_msg or ""):
-                tool_name = m.group("name").strip()
-                try:
-                    args = json.loads(m.group("body"))
-                    fn = TOOLS.get(tool_name)
-                    if not fn:
-                        out_q.put(json.dumps({"type": "chat", "sender": "tool", "message": f"unknown tool: {tool_name}"}))
-                    else:
-                        log.info("tool_call", extra={"extra": {"tool": tool_name, "args": args}})
-                        res = fn(**args)
-                        if not isinstance(res, str):
-                            res = json.dumps(res, indent=2)
-                        out_q.put(json.dumps({"type": "chat", "sender": "tool", "message": f"{tool_name} ->\n{res}"}))
-                except Exception as e:
-                    out_q.put(json.dumps({"type": "chat", "sender": "tool", "message": f"{tool_name} error: {e}"}))
-
-            # Manager-driven termination (only in Directed). Human may still type TERMINATE.
-            if mgr.should_terminate():
-                out_q.put(json.dumps({"type": "chat", "sender": "Manager", "message": "All required roles completed post-artifact. TERMINATE"}))
-                break
+        user_proxy.initiate_chat(manager, message=goal)
 
         out_q.put(json.dumps({"type": "status", "state": "idle"}))
 
     except Exception as e:
+        log.error("orchestrator_error", extra={"extra": {"err": str(e), "trace": traceback.format_exc()}})
         out_q.put(json.dumps({"type": "chat", "sender": "Error", "message": f"{type(e).__name__}: {e}"}))
     finally:
         out_q.put("[DONE]")
@@ -536,7 +253,7 @@ def stream():
     model = request.args.get("model", DEFAULT_MODEL)
     goal_b64 = request.args.get("goal", "")
     agents_b64 = request.args.get("agents", "")
-    manager_mode = request.args.get("manager_mode", "Directed")  # Directed | RoundRobin | Manual
+    manager_mode = request.args.get("manager_mode", "Directed")
     max_turns = int(request.args.get("turns", "60"))
 
     try:
@@ -588,15 +305,6 @@ def user_input():
         pass
     return jsonify({"ok": True})
 
-@app.post("/choose_next")
-def choose_next():
-    name = (request.json or {}).get("name")
-    try:
-        state.manual_next_q.put_nowait(name)
-    except Exception:
-        pass
-    return jsonify({"ok": True})
-
 # ===================== Settings / Models =====================
 
 @app.post("/api/settings/ollama")
@@ -627,7 +335,6 @@ def api_models():
         return jsonify({"error": "connect_failed", "message": str(e)}), 503
     except ValueError as e:
         return jsonify({"error": "bad_json", "message": str(e)}), 502
-
 
 @app.post("/api/generate_description")
 def generate_description():
@@ -684,13 +391,11 @@ def api_upload():
     f = request.files.get("file")
     if not f:
         return jsonify({"error": "missing file"}), 400
-    # size check
     f.stream.seek(0, io.SEEK_END)
     size = f.stream.tell()
     f.stream.seek(0)
     if size > MAX_UPLOAD_BYTES:
         return jsonify({"error": "too_large", "max": MAX_UPLOAD_BYTES}), 413
-    # mime check
     mime = f.mimetype or "application/octet-stream"
     if mime not in ALLOWED_UPLOAD_MIMES:
         if not secure_filename(f.filename).endswith((".txt", ".md", ".json", ".py")):
