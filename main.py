@@ -249,11 +249,12 @@ def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any]], ma
             )
 
         # Set speaker selection method
-        speaker_selection_method = "auto"
         if manager_mode == "RoundRobin":
             speaker_selection_method = "round_robin"
         elif manager_mode == "Manual":
             speaker_selection_method = manual_speaker_selection
+        else: # Default to "auto" for "Auto" or any other value
+            speaker_selection_method = "auto"
 
         groupchat = GroupChat(
             agents=autogen_agents,
@@ -282,7 +283,7 @@ def stream():
     model = request.args.get("model", DEFAULT_MODEL)
     goal_b64 = request.args.get("goal", "")
     agents_b64 = request.args.get("agents", "")
-    manager_mode = request.args.get("manager_mode", "Directed")
+    manager_mode = request.args.get("manager_mode", "Auto")
     max_turns = int(request.args.get("turns", "60"))
 
     try:
