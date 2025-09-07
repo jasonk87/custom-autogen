@@ -64,11 +64,43 @@ const $=(s)=>document.querySelector(s); const $$=(s)=>Array.from(document.queryS
       }
     } else {
       A.innerHTML = `<button id='start' class='btn btn-primary' style='width:100%'>Start</button>`;
-      $('#start').onclick=()=>{ if(agents.length<2){ alert('Add at least two agents'); return; } startRun(); };
+      $('#start').onclick=startRun;
     }
   }
 
   async function startRun(){
+    if ($('#auto-populate-team').checked) {
+      const goal = $('#goal').value.trim();
+      if (!goal) {
+        toast('Please enter a goal before starting.');
+        return;
+      }
+      toast('Generating team from goal...');
+      try {
+        const r = await fetch('/api/generate_team', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ goal: goal, model: $('#model').value })
+        });
+        if (!r.ok) {
+          const err = await r.json();
+          throw new Error(err.message || 'Failed to generate team');
+        }
+        const team = await r.json();
+        agents = team.map(a => ({...a, temperature: parseFloat($('#default-temp').value) || 0.3}));
+        renderTeam();
+        toast('Team generated.');
+      } catch (e) {
+        toast('Error generating team: ' + e.message);
+        return;
+      }
+    }
+
+    if (agents.length < 2) {
+      toast('Add at least two agents to start.');
+      return;
+    }
+
     if(es) es.close();
     $('#chat').innerHTML=''; closeThinkDock(); streams={};
     addMsg('System','Task started'); setStatus('running'); buttons(true);
@@ -218,44 +250,10 @@ const $=(s)=>document.querySelector(s); const $$=(s)=>Array.from(document.queryS
   // Auto-populate team
   $('#auto-populate-team').onchange = (e) => {
     const addBotCard = $('#add-bot-card');
-    const generateTeamContainer = $('#generate-team-container');
     if (e.target.checked) {
       addBotCard.classList.add('hidden');
-      generateTeamContainer.classList.remove('hidden');
     } else {
       addBotCard.classList.remove('hidden');
-      generateTeamContainer.classList.add('hidden');
-    }
-  };
-
-  $('#generate-team').onclick = async () => {
-    const goal = $('#goal').value.trim();
-    if (!goal) {
-      toast('Please enter a goal first.');
-      return;
-    }
-    const btn = $('#generate-team');
-    btn.disabled = true;
-    btn.textContent = 'Generating...';
-    try {
-      const r = await fetch('/api/generate_team', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ goal: goal, model: $('#model').value })
-      });
-      if (!r.ok) {
-        const err = await r.json();
-        throw new Error(err.message || 'Failed to generate team');
-      }
-      const team = await r.json();
-      agents = team.map(a => ({...a, temperature: parseFloat($('#default-temp').value) || 0.3}));
-      renderTeam();
-      toast('Team generated.');
-    } catch (e) {
-      toast('Error: ' + e.message);
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'Generate Team';
     }
   };
 

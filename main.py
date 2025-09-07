@@ -188,6 +188,23 @@ def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any]], ma
             except queue.Empty:
                 return "exit"
 
+        def manual_speaker_selection(last_speaker: ConversableAgent, agents: List[ConversableAgent]) -> ConversableAgent:
+            """A speaker selection function that waits for user input."""
+            out_q.put(json.dumps({"type": "status", "state": "waiting_for_input"}))
+            try:
+                next_speaker_name = state.manual_next_q.get(timeout=3600)
+                if next_speaker_name:
+                    for agent in agents:
+                        if agent.name == next_speaker_name:
+                            return agent
+            except queue.Empty:
+                # Default to the user proxy if no selection is made
+                for agent in agents:
+                    if isinstance(agent, UserProxyAgent):
+                        return agent
+            # Fallback to the first agent if something goes wrong
+            return agents[0]
+
         # Create agents
         autogen_agents: List[ConversableAgent] = []
 
@@ -231,7 +248,19 @@ def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any]], ma
                 trigger="on_receive",
             )
 
-        groupchat = GroupChat(agents=autogen_agents, messages=[], max_round=max_turns)
+        # Set speaker selection method
+        speaker_selection_method = "auto"
+        if manager_mode == "RoundRobin":
+            speaker_selection_method = "round_robin"
+        elif manager_mode == "Manual":
+            speaker_selection_method = manual_speaker_selection
+
+        groupchat = GroupChat(
+            agents=autogen_agents,
+            messages=[],
+            max_round=max_turns,
+            speaker_selection_method=speaker_selection_method
+        )
         manager = GroupChatManager(groupchat=groupchat, llm_config=llm_config)
 
         out_q.put(json.dumps({"type": "chat", "sender": "System", "message": f"Goal set: {goal}"}))
@@ -301,6 +330,15 @@ def user_input():
     msg = (request.json or {}).get("message")
     try:
         state.user_input_q.put_nowait(msg)
+    except Exception:
+        pass
+    return jsonify({"ok": True})
+
+@app.post("/choose_next")
+def choose_next():
+    name = (request.json or {}).get("name")
+    try:
+        state.manual_next_q.put_nowait(name)
     except Exception:
         pass
     return jsonify({"ok": True})
