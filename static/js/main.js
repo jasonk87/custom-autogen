@@ -95,33 +95,47 @@ const $=(s)=>document.querySelector(s); const $$=(s)=>Array.from(document.queryS
   $('#tab-settings').onclick=()=>{ $('#tab-settings').classList.add('active'); $('#tab-setup').classList.remove('active'); $('#tab-work').classList.remove('active'); $('#settings').classList.remove('hidden'); $('#setup').classList.add('hidden'); $('#work').classList.add('hidden'); };
 
   // Add agent & feedback
-  $('#bot-add').onclick=()=>{
-    const n=$('#bot-title').value.trim(); if(!n) return;
+  $('#bot-add').onclick=async()=>{
+    const title = $('#bot-title').value.trim();
+    if (!title) {
+      toast('Please enter a bot title.');
+      return;
+    }
+
+    let description = $('#bot-description').value.trim();
+    const btn = $('#bot-add');
+
+    if (!description) {
+      btn.disabled = true;
+      btn.textContent = 'Generating...';
+      try {
+        const r = await fetch('/api/generate_description', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ title: title, model: $('#model').value })
+        });
+        if (!r.ok) {
+          const err = await r.json();
+          throw new Error(err.message || 'Failed to generate description');
+        }
+        const data = await r.json();
+        description = data.description;
+      } catch (e) {
+        toast('Error: ' + e.message);
+        return;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Add';
+      }
+    }
+
     const temp = parseFloat($('#default-temp').value) || 0.3;
-    agents.push({name:n, system:$('#bot-description').value.trim(), temperature:temp });
-    $('#bot-title').value=''; $('#bot-description').value=''; renderTeam();
+    agents.push({name: title, system: description, temperature: temp});
+    $('#bot-title').value = '';
+    $('#bot-description').value = '';
+    renderTeam();
   };
 
-  $('#bot-generate-desc').onclick=async()=>{
-    const title = $('#bot-title').value.trim();
-    if (!title) { toast('Please enter a bot title first.'); return; }
-    const btn = $('#bot-generate-desc');
-    btn.disabled = true; btn.textContent = '...';
-    try {
-      const r = await fetch('/api/generate_description', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ title: title, model: $('#model').value })
-      });
-      if (!r.ok) { const err = await r.json(); throw new Error(err.message || 'Failed to generate'); }
-      const data = await r.json();
-      $('#bot-description').value = data.description;
-    } catch (e) {
-      toast('Error: ' + e.message);
-    } finally {
-      btn.disabled = false; btn.textContent = 'Generate';
-    }
-  };
   $('#fbform').onsubmit=async(e)=>{ e.preventDefault(); const v=$('#fb').value.trim(); if(!v) return; addMsg('You', v, true); await fetch('/user_input',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({message:v})}); $('#fb').value=''; setStatus('running'); };
 
   // Workspace
@@ -132,7 +146,118 @@ const $=(s)=>document.querySelector(s); const $$=(s)=>Array.from(document.queryS
   $('#refresh').onclick=()=>{ refreshFiles(); refreshTree(); };
 
   // Sessions quick save/load
-  $('#sessions').onclick=async()=>{ const name=prompt('Session name to save/load (leave blank to load list)'); if(name){ await fetch('/api/sessions',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, model:$('#model').value, goal:$('#goal').value, agents})}); toast('Saved.'); } else { const r=await fetch('/api/sessions'); const list=await r.json(); const pick=prompt('Available:\\n'+list.join('\\n')+'\\n\\nType a name to load:'); if(pick){ const d=await (await fetch('/api/sessions/'+pick)).json(); agents=d.agents||[]; $('#goal').value=d.goal||''; await loadModels(); if(d.model){ $('#model').value=d.model; } renderTeam(); }} };
+  const sessionsModal = $('#sessions-modal');
+  const sessionsList = $('#sessions-list');
+
+  async function renderSessions() {
+    const r = await fetch('/api/sessions');
+    const files = await r.json();
+    sessionsList.innerHTML = files.map(f => `
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:5px; border-bottom:1px solid var(--border);">
+        <span>${f}</span>
+        <div>
+          <button class="btn btn-success session-load" data-file="${f}">Load</button>
+          <button class="btn btn-danger session-delete" data-file="${f}">Delete</button>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  $('#sessions').onclick = async () => {
+    await renderSessions();
+    sessionsModal.style.display = 'flex';
+  };
+
+  $('#sessions-close').onclick = () => {
+    sessionsModal.style.display = 'none';
+  };
+
+  $('#session-save').onclick = async () => {
+    const name = $('#session-name').value.trim();
+    if (!name) {
+      toast('Please enter a session name.');
+      return;
+    }
+    await fetch('/api/sessions', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name, model:$('#model').value, goal:$('#goal').value, agents})
+    });
+    toast('Session saved.');
+    $('#session-name').value = '';
+    await renderSessions();
+  };
+
+  sessionsList.addEventListener('click', async (e) => {
+    const target = e.target;
+    const file = target.dataset.file;
+
+    if (target.classList.contains('session-load')) {
+      const r = await fetch(`/api/sessions/${file}`);
+      const data = await r.json();
+      agents = data.agents || [];
+      $('#goal').value = data.goal || '';
+      await loadModels();
+      if (data.model) {
+        $('#model').value = data.model;
+      }
+      renderTeam();
+      toast(`Session ${file} loaded.`);
+      sessionsModal.style.display = 'none';
+    }
+
+    if (target.classList.contains('session-delete')) {
+      if (confirm(`Are you sure you want to delete ${file}?`)) {
+        await fetch(`/api/sessions/${file}`, { method: 'DELETE' });
+        toast(`Session ${file} deleted.`);
+        await renderSessions();
+      }
+    }
+  });
+
+  // Auto-populate team
+  $('#auto-populate-team').onchange = (e) => {
+    const addBotCard = $('#add-bot-card');
+    const generateTeamContainer = $('#generate-team-container');
+    if (e.target.checked) {
+      addBotCard.classList.add('hidden');
+      generateTeamContainer.classList.remove('hidden');
+    } else {
+      addBotCard.classList.remove('hidden');
+      generateTeamContainer.classList.add('hidden');
+    }
+  };
+
+  $('#generate-team').onclick = async () => {
+    const goal = $('#goal').value.trim();
+    if (!goal) {
+      toast('Please enter a goal first.');
+      return;
+    }
+    const btn = $('#generate-team');
+    btn.disabled = true;
+    btn.textContent = 'Generating...';
+    try {
+      const r = await fetch('/api/generate_team', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ goal: goal, model: $('#model').value })
+      });
+      if (!r.ok) {
+        const err = await r.json();
+        throw new Error(err.message || 'Failed to generate team');
+      }
+      const team = await r.json();
+      agents = team.map(a => ({...a, temperature: parseFloat($('#default-temp').value) || 0.3}));
+      renderTeam();
+      toast('Team generated.');
+    } catch (e) {
+      toast('Error: ' + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Generate Team';
+    }
+  };
 
   // Export transcript (MD/HTML)
   $('#export').onclick=async()=>{ const tr=(window.__transcript||[]); const r1=await fetch('/api/transcript/md',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({transcript: tr})}); const d1=await r1.json(); const r2=await fetch('/api/transcript/html',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({transcript: tr})}); const d2=await r2.json(); toast('Exports ready: MD & HTML'); if(d1.file){ window.open(d1.file,'_blank'); } if(d2.file){ window.open(d2.file,'_blank'); } };

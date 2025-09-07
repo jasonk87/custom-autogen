@@ -371,6 +371,57 @@ def generate_description():
         log.error("generate_desc_error", extra={"extra": {"err": str(e)}})
         return jsonify({"error": "unknown", "message": str(e)}), 500
 
+@app.post("/api/generate_team")
+def generate_team():
+    data = request.json or {}
+    goal = data.get("goal")
+    model = data.get("model", DEFAULT_MODEL)
+
+    if not goal:
+        return jsonify({"error": "missing_goal"}), 400
+
+    _, chat_url = get_ollama_endpoints()
+    prompt = f"""
+Given the following goal, please generate a team of up to 4 AI agents to accomplish it.
+Return the team as a JSON array of objects, where each object has a "name" and a "system_message".
+The "name" should be a short, descriptive title for the agent (e.g., "Code_Reviewer").
+The "system_message" should be a concise description of the agent's role and responsibilities.
+
+Example:
+Goal: "Build a flask application."
+Output:
+[
+  {{"name": "Programmer", "system_message": "You are a Python programmer who writes Flask applications."}},
+  {{"name": "Code_Reviewer", "system_message": "You are a code reviewer who checks for bugs and style issues."}}
+]
+
+Goal: "{goal}"
+Output:
+"""
+
+    messages = [{"role": "user", "content": prompt}]
+
+    try:
+        r = _http.post(
+            chat_url,
+            json={
+                "model": model,
+                "messages": messages,
+                "stream": False,
+                "options": {"temperature": 0.2},
+                "format": "json"
+            },
+            timeout=120.0,
+        )
+        r.raise_for_status()
+        payload = r.json()
+        content = payload.get("message", {}).get("content", "")
+        team_cfg = json.loads(content)
+        return jsonify(team_cfg)
+    except Exception as e:
+        log.error("team_generate_error", extra={"extra": {"err": str(e)}})
+        return jsonify({"error": "team_generation_failed", "message": str(e)}), 500
+
 # ===================== Workspace & Sessions =====================
 
 @app.get("/api/workspace/files")
@@ -432,6 +483,18 @@ def sessions_save():
     with open(fp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
     return jsonify({"ok": True, "file": fp}), 201
+
+@app.delete("/api/sessions/<path:name>")
+def sessions_delete(name: str):
+    fp = os.path.join(SESSIONS_DIR, name)
+    if not os.path.exists(fp):
+        return jsonify({"error": "not_found"}), 404
+    try:
+        os.remove(fp)
+        return jsonify({"ok": True}), 200
+    except Exception as e:
+        log.error("session_delete_error", extra={"extra": {"err": str(e)}})
+        return jsonify({"error": "delete_failed", "message": str(e)}), 500
 
 @app.post("/api/transcript/md")
 def export_md():

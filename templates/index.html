@@ -78,15 +78,21 @@
           <label>Team Goal</label>
           <textarea id="goal" placeholder="e.g. Build a Flask app and write files to workspace"></textarea>
         </div>
-        <div class="card">
+        <div class="group">
+          <label style="display:flex; align-items:center; gap:8px;">
+            <input type="checkbox" id="auto-populate-team" />
+            <span>Auto-populate team from goal</span>
+          </label>
+        </div>
+        <div id="generate-team-container" class="group hidden">
+          <button id="generate-team" class="btn btn-success" style="width:100%;">Generate Team</button>
+        </div>
+        <div class="card" id="add-bot-card">
           <div style="font-weight:700;margin-bottom:6px">Add Bot</div>
           <input id="bot-title" placeholder="Bot Title (e.g. Python Expert)" style="margin-bottom:6px" />
-          <label for="bot-description">Description</label>
-          <div class="row2" style="margin-bottom:6px">
-            <textarea id="bot-description" placeholder="Leave blank and click Generate" style="min-height:50px"></textarea>
-            <button id="bot-generate-desc" class="btn btn-neutral">Generate</button>
-          </div>
-          <div style="display:flex;justify-content:flex-end;margin-top:6px;">
+          <label for="bot-description">Description (optional)</label>
+          <textarea id="bot-description" placeholder="Leave blank for AI to generate" style="min-height:50px; margin-bottom:6px;"></textarea>
+          <div style="display:flex;justify-content:flex-end;">
             <button id="bot-add" class="btn btn-primary">Add</button>
           </div>
         </div>
@@ -161,6 +167,24 @@
       </form>
     </main>
   </div>
+
+    <!-- Sessions Modal -->
+    <div id="sessions-modal" style="display:none; position:fixed; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1000; align-items:center; justify-content:center; display:flex;">
+      <div style="background:var(--panel); padding:20px; border-radius:12px; width:min(90%, 500px); border:1px solid var(--border);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+          <h2 style="margin:0; font-size:18px;">Manage Sessions</h2>
+          <button id="sessions-close" class="btn btn-neutral">✕</button>
+        </div>
+        <div id="sessions-list" style="margin-bottom:15px; max-height:200px; overflow-y:auto;"></div>
+        <div class="group">
+          <label>Save Current Session As</label>
+          <div class="row2">
+            <input id="session-name" placeholder="New session name..." />
+            <button id="session-save" class="btn btn-primary">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
 
 <script src="/static/js/main.js"></script>
 </body>
