@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Custom Agent Studio — v10</title>
+  <style>
+    :root{--bg:#0f172a;--panel:#1f2937;--muted:#9ca3af;--text:#e5e7eb;--border:#374151;--chip:#334155;--blue:#2563eb;--blue2:#1d4ed8;--red:#ef4444;--green:#10b981;--amber:#f59e0b}
+    *{box-sizing:border-box} body{margin:0;background:#0b1220;color:var(--text);font:14px/1.4 system-ui,Segoe UI,Inter,Arial}
+    .app{display:flex;height:100vh}
+    .side{width:34%;background:var(--panel);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:18px}
+    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+    h1{font-size:18px;margin:0}
+    .tabs{display:flex;border-bottom:1px solid var(--border);margin-bottom:10px}
+    .tab{flex:1;padding:10px 8px;border:none;background:transparent;color:#cbd5e1;font-weight:600;cursor:pointer;transition:150ms}
+    .tab.active{background:var(--chip);color:white;border-radius:6px 6px 0 0}
+    .group{margin:8px 0}
+    label{display:block;margin-bottom:4px;color:#cbd5e1;font-size:12px}
+    input,select,textarea{width:100%;background:#111827;color:#e5e7eb;border:1px solid #334155;border-radius:8px;padding:8px}
+    textarea{min-height:70px}
+    .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .card{background:#0f172a;border:1px solid var(--border);border-radius:10px;padding:10px}
+    .btn{display:inline-flex;align-items:center;justify-content:center;border:none;border-radius:10px;padding:10px 12px;font-weight:600;color:white;cursor:pointer;transition:150ms}
+    .btn:disabled{opacity:.5;cursor:not-allowed}
+    .btn-primary{background:var(--blue)} .btn-primary:hover{background:var(--blue2)}
+    .btn-danger{background:var(--red)} .btn-success{background:var(--green)} .btn-neutral{background:#374151}
+    .team-item{display:flex;gap:6px;align-items:center;background:#0b1220;border:1px solid #2b3443;border-radius:8px;padding:6px}
+    .team-item .name{font-weight:700} .team-item .sys{flex:1} .team-item .num{width:70px}
+    .main{flex:1;display:flex;flex-direction:column;background:#0b1220;position:relative}
+    #chat{flex:1;overflow:auto;padding:18px}
+    .bubble{max-width:90%;white-space:pre-wrap;border-radius:12px;padding:10px;margin:8px 0;box-shadow:0 4px 10px rgba(0,0,0,.15)}
+    .from-you{background:#1d4ed8;margin-left:auto} .from-them{background:#1f2937}
+    .who{font-size:11px;opacity:.9;margin-bottom:4px}
+    #status{padding:10px;text-align:center;border-top:1px solid var(--border);background:var(--panel)}
+    #fbform{display:flex;gap:8px;border-top:1px solid var(--border);padding:10px;background:var(--panel)}
+    .hidden{display:none}
+    .pill{display:inline-block;background:#0b213f;border:1px solid #23406e;color:#cfe4ff;border-radius:999px;padding:4px 8px;font-size:12px}
+    .row2{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end}
+    .tree ul{list-style:none;padding-left:14px} .tree li{margin:4px 0}
+
+    /* Thinking UI */
+    #thinkdock{position:absolute;right:16px;bottom:72px;max-width:420px;width:min(42vw,420px);background:#0b213f;border:1px solid #23406e;border-radius:12px;box-shadow:0 10px 25px rgba(0,0,0,.35);display:none}
+    #thinkhdr{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-bottom:1px solid #1f3a63}
+    #thinkhdr .title{font-weight:700;color:#cfe4ff}
+    #thinkbody{max-height:40vh;overflow:auto;padding:10px;white-space:pre-wrap;color:#e0edff}
+    #thinkhdr .chip{font-size:12px;background:#092245;color:#93c5fd;border:1px solid #1e40af;padding:2px 6px;border-radius:999px}
+    #thinkhdr button{background:#0e1a2b;border:1px solid #2a4066;color:#cfe4ff;border-radius:8px;padding:4px 6px;cursor:pointer}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="side">
+      <header>
+        <h1>Custom Agent Studio</h1>
+        <div style="display:flex;gap:8px">
+          <button id="sessions" class="btn btn-neutral">Sessions</button>
+        </div>
+      </header>
+
+      <div class="tabs">
+        <button id="tab-setup" class="tab active">Setup</button>
+        <button id="tab-work" class="tab">Workspace</button>
+        <button id="tab-settings" class="tab">Settings</button>
+      </div>
+
+      <section id="setup">
+        <div class="row">
+          <div class="group">
+            <label>Manager Mode</label>
+            <select id="mode"><option>Directed</option><option>RoundRobin</option><option>Manual</option></select>
+          </div>
+          <div class="group">
+            <label>Max Turns</label>
+            <input id="turns" type="number" min="1" max="200" value="60" />
+          </div>
+        </div>
+        <div class="group">
+          <label>Team Goal</label>
+          <textarea id="goal" placeholder="e.g. Build a Flask app and write files to workspace"></textarea>
+        </div>
+        <div class="card">
+          <div style="font-weight:700;margin-bottom:6px">Add Bot</div>
+          <input id="bot-title" placeholder="Bot Title (e.g. Python Expert)" style="margin-bottom:6px" />
+          <label for="bot-description">Description</label>
+          <div class="row2" style="margin-bottom:6px">
+            <textarea id="bot-description" placeholder="Leave blank and click Generate" style="min-height:50px"></textarea>
+            <button id="bot-generate-desc" class="btn btn-neutral">Generate</button>
+          </div>
+          <div style="display:flex;justify-content:flex-end;margin-top:6px;">
+            <button id="bot-add" class="btn btn-primary">Add</button>
+          </div>
+        </div>
+        <div class="group">
+          <div style="font-weight:700;margin-bottom:6px">Team</div>
+          <div id="team"></div>
+        </div>
+        <div class="group" id="actions"></div>
+        <div class="group">
+          <button id="export" class="btn btn-neutral" style="width:100%">Export Transcript</button>
+        </div>
+      </section>
+
+      <section id="work" class="hidden">
+        <div class="group" style="display:flex;gap:8px;align-items:center">
+          <input id="file" type="file" />
+          <button id="upload" class="btn btn-neutral">Upload</button>
+          <button id="refresh" class="btn btn-neutral">Refresh</button>
+        </div>
+        <div class="tree" id="tree"></div>
+        <div id="files" style="font-size:13px;margin-top:8px"></div>
+      </section>
+
+      <section id="settings" class="hidden">
+        <div class="group">
+          <label>Ollama Model <span id="model-count" class="pill"></span></label>
+          <div class="row2">
+            <select id="model"></select>
+            <button id="reloadModels" class="btn btn-neutral">Reload</button>
+          </div>
+          <div id="model-hint" style="color:#9ca3af;font-size:12px;margin-top:4px"></div>
+        </div>
+        <div class="group">
+            <label>Default Temperature</label>
+            <input id="default-temp" type="number" min="0" max="2" step="0.1" value="0.3" />
+        </div>
+        <div class="group">
+          <label>Ollama Base URL</label>
+          <div class="row2">
+            <input id="ollamaBase" value="http://192.168.86.30:11434" />
+            <button id="saveBase" class="btn btn-primary">Save</button>
+          </div>
+          <div id="baseHint" style="color:#9ca3af;font-size:12px;margin-top:4px">Example: http://192.168.86.30:11434</div>
+        </div>
+        <div class="group">
+          <button id="probe" class="btn btn-neutral">Probe Ollama</button>
+          <span id="probeHint" style="margin-left:8px;color:#9ca3af"></span>
+        </div>
+      </section>
+    </aside>
+
+    <main class="main">
+      <div id="chat"></div>
+
+      <!-- Thinking Dock -->
+      <div id="thinkdock">
+        <div id="thinkhdr">
+          <span class="title">Thinking</span>
+          <div style="display:flex;gap:6px;align-items:center">
+            <span id="thinklen" class="chip">0 chars</span>
+            <button id="thinkmin">Minimize</button>
+            <button id="thinkclose">Close</button>
+          </div>
+        </div>
+        <div id="thinkbody"></div>
+      </div>
+
+      <div id="status">Status: Idle</div>
+      <form id="fbform">
+        <input id="fb" placeholder="Type real-time feedback or ```python code```…" disabled />
+        <button id="send" class="btn btn-primary" disabled>Send</button>
+      </form>
+    </main>
+  </div>
+
+<script src="/static/js/main.js"></script>
+</body>
+</html>
