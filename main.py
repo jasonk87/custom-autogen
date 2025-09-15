@@ -951,7 +951,7 @@ HTML = r"""
   $('#thinkmin').onclick=()=>{ if(think.minimized) expandThinkDock(); else collapseThinkDock(); };
   $('#thinkclose').onclick=()=>{ closeThinkDock(); };
 
-  function renderTeam(){ const T=$('#team'); if(!agents.length){T.innerHTML='<div style="color:#9ca3af">Add at least two agents.</div>';return} T.innerHTML=agents.map((a,i)=>`<div class='team-item'> <input data-i='${i}' class='name' value='${a.name}' style='width:120px' /> <input data-i='${i}' class='sys' value='${a.system||""}' placeholder='system message' /> <input data-i='${i}' class='num' type='number' step='0.1' min='0' max='2' value='${a.temperature??0.3}' /> <button data-i='${i}' class='btn btn-neutral up'>▲</button> <button data-i='${i}' class='btn btn-neutral down'>▼</button> <button data-i='${i}' class='btn btn-danger rm'>✕</button> </div>`).join(''); $$('.name').forEach(e=>e.onchange=()=>{agents[e.dataset.i].name=e.value;}); $$('.sys').forEach(e=>e.onchange=()=>{agents[e.dataset.i].system=e.value;}); $$('.num').forEach(e=>e.onchange=()=>{agents[e.dataset.i].temperature=parseFloat(e.value||'0.3');}); $$('.rm').forEach(e=>e.onclick=()=>{agents.splice(+e.dataset.i,1); renderTeam();}); $$('.up').forEach(e=>e.onclick=()=>{const i=+e.dataset.i; if(i>0){[agents[i-1],agents[i]]=[agents[i],agents[i-1]]; renderTeam();}}); $$('.down').forEach(e=>e.onclick=()=>{const i=+e.dataset.i; if(i<agents.length-1){[agents[i+1],agents[i]]=[agents[i],agents[i+1]]; renderTeam();}}); }
+function renderTeam(){ const T=$('#team'); if(!agents.length){T.innerHTML='<div style="color:#9ca3af">Add at least two agents.</div>';return} T.innerHTML=agents.map((a,i)=>`<div class='team-item'> <input data-i='${i}' class='name' value='${a.name}' style='width:120px' /> <input data-i='${i}' class='sys' value='${a.system||""}' placeholder='system message' /> <input data-i='${i}' class='num' type='number' step='0.1' min='0' max='2' value='${a.temperature??0.3}' /> <button data-i='${i}' class='btn btn-neutral up'>▲</button> <button data-i='${i}' class='btn btn-neutral down'>▼</button> <button data-i='${i}' class='btn btn-danger rm'>✕</button> </div>`).join(''); $$('.name').forEach(e=>e.onchange=()=>{agents[e.dataset.i].name=e.value;saveSession();}); $$('.sys').forEach(e=>e.onchange=()=>{agents[e.dataset.i].system=e.value;saveSession();}); $$('.num').forEach(e=>e.onchange=()=>{agents[e.dataset.i].temperature=parseFloat(e.value||'0.3');saveSession();}); $$('.rm').forEach(e=>e.onclick=()=>{agents.splice(+e.dataset.i,1); renderTeam(); saveSession();}); $$('.up').forEach(e=>e.onclick=()=>{const i=+e.dataset.i; if(i>0){[agents[i-1],agents[i]]=[agents[i],agents[i-1]]; renderTeam(); saveSession();}}); $$('.down').forEach(e=>e.onclick=()=>{const i=+e.dataset.i; if(i<agents.length-1){[agents[i+1],agents[i]]=[agents[i],agents[i+1]]; renderTeam(); saveSession();}}); }
 
   function buttons(running){
     const A=$('#actions');
@@ -996,7 +996,7 @@ HTML = r"""
   $('#tab-settings').onclick=()=>{ $('#tab-settings').classList.add('active'); $('#tab-setup').classList.remove('active'); $('#tab-work').classList.remove('active'); $('#settings').classList.remove('hidden'); $('#setup').classList.add('hidden'); $('#work').classList.add('hidden'); };
 
   // Add agent & feedback
-  $('#add').onclick=()=>{const n=$('#aname').value.trim(); if(!n) return; agents.push({name:n, system:$('#asys').value.trim(), temperature:parseFloat($('#atemp').value)||0.3}); $('#aname').value=''; $('#asys').value=''; renderTeam();};
+  $('#add').onclick=()=>{const n=$('#aname').value.trim(); if(!n) return; agents.push({name:n, system:$('#asys').value.trim(), temperature:parseFloat($('#atemp').value)||0.3}); $('#aname').value=''; $('#asys').value=''; renderTeam(); saveSession();};
   $('#fbform').onsubmit=async(e)=>{ e.preventDefault(); const v=$('#fb').value.trim(); if(!v) return; addMsg('You', v, true); await fetch('/user_input',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({message:v})}); $('#fb').value=''; setStatus('running'); };
 
   // Workspace
@@ -1007,7 +1007,7 @@ HTML = r"""
   $('#refresh').onclick=()=>{ refreshFiles(); refreshTree(); };
 
   // Sessions quick save/load
-  $('#sessions').onclick=async()=>{ const name=prompt('Session name to save/load (leave blank to load list)'); if(name){ await fetch('/api/sessions',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, model:$('#model').value, goal:$('#goal').value, agents})}); toast('Saved.'); } else { const r=await fetch('/api/sessions'); const list=await r.json(); const pick=prompt('Available:\\n'+list.join('\\n')+'\\n\\nType a name to load:'); if(pick){ const d=await (await fetch('/api/sessions/'+pick)).json(); agents=d.agents||[]; $('#goal').value=d.goal||''; await loadModels(); if(d.model){ $('#model').value=d.model; } renderTeam(); }} };
+  $('#sessions').onclick=async()=>{ const name=prompt('Session name to save/load (leave blank to load list)'); if(name){ saveSession(); await fetch('/api/sessions',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, model:$('#model').value, goal:$('#goal').value, agents})}); toast('Saved.'); } else { const r=await fetch('/api/sessions'); const list=await r.json(); const pick=prompt('Available:\\n'+list.join('\\n')+'\\n\\nType a name to load:'); if(pick){ const d=await (await fetch('/api/sessions/'+pick)).json(); agents=d.agents||[]; $('#goal').value=d.goal||''; await loadModels(); if(d.model){ $('#model').value=d.model; } renderTeam(); }} };
 
   // Export transcript (MD/HTML)
   $('#export').onclick=async()=>{ const tr=(window.__transcript||[]); const r1=await fetch('/api/transcript/md',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({transcript: tr})}); const d1=await r1.json(); const r2=await fetch('/api/transcript/html',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({transcript: tr})}); const d2=await r2.json(); toast('Exports ready: MD & HTML'); if(d1.file){ window.open(d1.file,'_blank'); } if(d2.file){ window.open(d2.file,'_blank'); } };
@@ -1018,12 +1018,63 @@ HTML = r"""
 
   // Models
   $('#reloadModels').onclick=()=>loadModels();
-  async function loadModels(){ $('#model').innerHTML='<option>Loading…</option>'; try{ const r=await fetch('/api/models'); const models=await r.json(); const sel=$('#model'); if(Array.isArray(models)&&models.length){ sel.innerHTML=models.map(m=>`<option>${m}</option>`).join(''); const def = models.includes('qwen3:8b')?'qwen3:8b':models[0]; sel.value=def; $('#model-hint').textContent=`Loaded ${models.length} models from Ollama`; $('#model-count').textContent=models.length+' found'; lastModels=models; } else { sel.innerHTML=''; $('#model-hint').textContent='No models found'; $('#model-count').textContent='0 found'; } } catch(e){ $('#model').innerHTML=''; $('#model-hint').textContent='Failed to load models: '+e.message; $('#model-count').textContent='error'; } }
+  async function loadModels(){
+    $('#model').innerHTML='<option>Loading…</option>';
+    try{
+      const r = await fetch('/api/models');
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        const msg = d.message || `HTTP ${r.status}`;
+        throw new Error(`Failed to connect to Ollama: ${msg}`);
+      }
+      const models = await r.json();
+      const sel=$('#model');
+      if(Array.isArray(models)&&models.length){
+        sel.innerHTML=models.map(m=>`<option>${m}</option>`).join('');
+        const def = models.includes('qwen3:8b')?'qwen3:8b':models[0];
+        sel.value=def;
+        $('#model-hint').textContent=`Loaded ${models.length} models from Ollama`;
+        $('#model-count').textContent=models.length+' found';
+        lastModels=models;
+      } else {
+        sel.innerHTML='';
+        $('#model-hint').textContent='No models found, but Ollama is reachable.';
+        $('#model-count').textContent='0 found';
+      }
+    } catch(e){
+      $('#model').innerHTML='';
+      $('#model-hint').textContent = 'Failed to load models. Is Ollama running?';
+      $('#model-count').textContent = 'error';
+      toast(e.message);
+    }
+  }
 
   // Transcript capture
   const origAddMsg = addMsg; addMsg = function(sender, text, mine=false, id=null){ window.__transcript=(window.__transcript||[]).concat([{t:Date.now(), from:sender, text}]); return origAddMsg(sender,text,mine,id); };
 
+  // Session auto-save
+  function saveSession() {
+    try {
+      const session = { goal: $('#goal').value, agents: agents };
+      localStorage.setItem('agentStudioSession', JSON.stringify(session));
+    } catch(e) { console.error("Failed to save session", e); }
+  }
+  function loadSession() {
+    const saved = localStorage.getItem('agentStudioSession');
+    if (!saved) return;
+    try {
+      const session = JSON.parse(saved);
+      if (session.goal) $('#goal').value = session.goal;
+      if (session.agents) agents = session.agents;
+    } catch (e) {
+      console.error("Failed to load session", e);
+      localStorage.removeItem('agentStudioSession');
+    }
+  }
+  $('#goal').oninput = saveSession;
+
   // Init
+  loadSession();
   setStatus('idle'); buttons(false); renderTeam(); loadModels();
 </script>
 </body>
