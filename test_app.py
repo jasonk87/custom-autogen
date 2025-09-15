@@ -2,7 +2,8 @@ import base64
 import json
 import os
 import pytest
-from main import app, WORKSPACE_DIR
+from app.config import WORKSPACE_DIR
+from app.server import app
 
 # Ensure the workspace directory exists for the test
 os.makedirs(WORKSPACE_DIR, exist_ok=True)
@@ -31,7 +32,7 @@ def test_e2e_mocked(client, monkeypatch):
         return
 
     # 2. Apply the mock to the Agent.stream method for the duration of this test
-    monkeypatch.setattr('main.Agent.stream', mock_stream)
+    monkeypatch.setattr('app.core.Agent.stream', mock_stream)
 
     # 3. Prepare the request payload for the /stream endpoint
     goal = "create a Python file named hello.py in the workspace with the content print('hello world')"
