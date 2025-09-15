@@ -152,6 +152,27 @@ def api_upload():
     f.save(fp)
     return jsonify({"ok": True, "file": fn, "bytes": size})
 
+@app.post("/api/workspace/save")
+def api_save():
+    data = request.json or {}
+    path = data.get("path")
+    content = data.get("content")
+    if not path or content is None:
+        return jsonify({"error": "missing path or content"}), 400
+
+    # Basic security check to prevent directory traversal
+    if '..' in path or path.startswith('/'):
+        return jsonify({"error": "invalid path"}), 400
+
+    fp = os.path.join(WORKSPACE_DIR, path)
+    try:
+        os.makedirs(os.path.dirname(fp), exist_ok=True)
+        with open(fp, "w", encoding="utf-8") as f:
+            f.write(content)
+        return jsonify({"ok": True, "file": path}), 200
+    except Exception as e:
+        return jsonify({"error": "write_failed", "message": str(e)}), 500
+
 @app.get("/workspace/<path:fn>")
 def ws_file(fn: str):
     return send_from_directory(WORKSPACE_DIR, fn)
@@ -229,6 +250,7 @@ HTML = r"""
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Custom Agent Studio — v10</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.53.0/min/vs/loader.js"></script>
   <style>
     :root{--bg:#0f172a;--panel:#1f2937;--muted:#9ca3af;--text:#e5e7eb;--border:#374151;--chip:#334155;--blue:#2563eb;--blue2:#1d4ed8;--red:#ef4444;--green:#10b981;--amber:#f59e0b}
     *{box-sizing:border-box} body{margin:0;background:#0b1220;color:var(--text);font:14px/1.4 system-ui,Segoe UI,Inter,Arial}
@@ -268,6 +290,43 @@ HTML = r"""
     #thinkbody{max-height:40vh;overflow:auto;padding:10px;white-space:pre-wrap;color:#e0edff}
     #thinkhdr .chip{font-size:12px;background:#092245;color:#93c5fd;border:1px solid #1e40af;padding:2px 6px;border-radius:999px}
     #thinkhdr button{background:#0e1a2b;border:1px solid #2a4066;color:#cfe4ff;border-radius:8px;padding:4px 6px;cursor:pointer}
+
+    /* Editor Modal */
+    #editor-modal {
+      display: none;
+      position: fixed;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+    }
+    #editor-container {
+      width: 80%;
+      height: 80%;
+      background: var(--panel);
+      border-radius: 12px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    #editor-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+    }
+    #editor-filename {
+      font-weight: 700;
+    }
+    #editor-main {
+      flex: 1;
+    }
   </style>
 </head>
 <body>
@@ -369,10 +428,27 @@ HTML = r"""
         <button id="send" class="btn btn-primary" disabled>Send</button>
       </form>
     </main>
+
+    <!-- Editor Modal -->
+    <div id="editor-modal">
+      <div id="editor-container">
+        <div id="editor-header">
+          <span id="editor-filename"></span>
+          <div style="display:flex; gap:8px;">
+            <button id="editor-copy-path" class="btn btn-neutral">Copy Path</button>
+            <button id="editor-copy-content" class="btn btn-neutral">Copy Content</button>
+            <button id="editor-save" class="btn btn-primary">Save</button>
+            <button id="editor-close" class="btn btn-neutral">Close</button>
+          </div>
+        </div>
+        <div id="editor-main" style="width:100%; height:100%"></div>
+      </div>
+    </div>
+
   </div>
 <script>
   const $=(s)=>document.querySelector(s); const $$=(s)=>Array.from(document.querySelectorAll(s));
-  let agents=[]; let streams={}; let es=null; let manualNames=[]; let lastModels=[];
+  let agents=[]; let streams={}; let es=null; let manualNames=[]; let lastModels=[]; let editor=null; let currentFile='';
   const think = { active:false, buffer:'', open:false, minimized:false };
   function toast(msg){ const t=document.createElement('div'); t.textContent=msg; t.style.cssText='position:fixed;right:12px;bottom:12px;background:#0b213f;color:#cfe4ff;border:1px solid #23406e;padding:10px 12px;border-radius:10px;box-shadow:0 10px 25px rgba(0,0,0,.35)'; document.body.appendChild(t); setTimeout(()=>t.remove(),3000); }
   function setStatus(state){ const S=$('#status'); const map={idle:'Status: Idle', running:'Status: Agents working…', waiting_for_input:'Status: Waiting for input…'}; S.textContent = map[state]||'Status'; $('#fb').disabled = state!=='waiting_for_input'; $('#send').disabled = state!=='waiting_for_input'; }
@@ -456,7 +532,7 @@ function renderTeam(){ const T=$('#team'); if(!agents.length){T.innerHTML='<div 
   $('#add').onclick=()=>{const n=$('#aname').value.trim(); if(!n) return; agents.push({name:n, system:$('#asys').value.trim(), temperature:parseFloat($('#atemp').value)||0.3}); $('#aname').value=''; $('#asys').value=''; renderTeam(); saveSession();};
   $('#fbform').onsubmit=async(e)=>{ e.preventDefault(); const v=$('#fb').value.trim(); if(!v) return; addMsg('You', v, true); await fetch('/user_input',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({message:v})}); $('#fb').value=''; setStatus('running'); };
   async function refreshFiles(){ const r=await fetch('/api/workspace/files'); const d=await r.json(); const F=$('#files'); F.innerHTML = d.length? d.map(x=>`<a style='display:block;padding:6px;border:1px solid #2b3443;border-radius:8px;margin:4px 0;background:#111827' target='_blank' href='${x.path}'>${x.name}</a>`).join('') : '<div style="color:#9ca3af">No files yet.</div>'; }
-  function renderTreeNode(node){ if(node.type==='file'){ return `<li><a target=\"_blank\" href=\"/workspace/${node.path}\">${node.name}</a></li>`; } let kids=''; if(Array.isArray(node.children)){ kids = '<ul>'+node.children.map(renderTreeNode).join('')+'</ul>'; } return `<li>${node.name}${kids}</li>`; }
+  function renderTreeNode(node){ if(node.type==='file'){ return `<li><a href="#" onclick="openEditor('${node.path}')">${node.name}</a></li>`; } let kids=''; if(Array.isArray(node.children)){ kids = '<ul>'+node.children.map(renderTreeNode).join('')+'</ul>'; } return `<li>${node.name}${kids}</li>`; }
   async function refreshTree(){ const r=await fetch('/api/workspace/tree'); const d=await r.json(); $('#tree').innerHTML = '<ul>'+renderTreeNode(d)+'</ul>'; }
   $('#upload').onclick=async()=>{ const f=$('#file').files[0]; if(!f) return; const fd=new FormData(); fd.append('file', f); const r = await fetch('/api/workspace/upload',{method:'POST',body:fd}); if(!r.ok){ const e=await r.json(); toast('Upload failed: '+(e.error||e.message)); } else { toast('Uploaded'); refreshFiles(); refreshTree(); }};
   $('#refresh').onclick=()=>{ refreshFiles(); refreshTree(); };
@@ -517,6 +593,59 @@ function renderTeam(){ const T=$('#team'); if(!agents.length){T.innerHTML='<div 
   $('#goal').oninput = saveSession;
   loadSession();
   setStatus('idle'); buttons(false); renderTeam(); loadModels();
+
+  function initEditor() {
+    window.require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.53.0/min/vs' }});
+    window.require(['vs/editor/editor.main'], () => {
+      editor = monaco.editor.create($('#editor-main'), {
+        value: '',
+        language: 'python',
+        theme: 'vs-dark',
+        automaticLayout: true,
+      });
+    });
+  }
+
+  async function openEditor(path) {
+    currentFile = path;
+    const r = await fetch(`/workspace/${path}`);
+    const content = await r.text();
+    $('#editor-filename').textContent = path;
+    editor.setValue(content);
+    $('#editor-modal').style.display = 'flex';
+  }
+
+  $('#editor-close').onclick = () => {
+    $('#editor-modal').style.display = 'none';
+  };
+
+  $('#editor-save').onclick = async () => {
+    const content = editor.getValue();
+    const r = await fetch('/api/workspace/save', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({path: currentFile, content: content})
+    });
+    if (r.ok) {
+      toast('File saved.');
+      $('#editor-modal').style.display = 'none';
+    } else {
+      const err = await r.json();
+      toast('Save failed: ' + (err.error || err.message));
+    }
+  };
+
+  $('#editor-copy-path').onclick = () => {
+    navigator.clipboard.writeText(currentFile);
+    toast('Path copied to clipboard.');
+  };
+
+  $('#editor-copy-content').onclick = () => {
+    navigator.clipboard.writeText(editor.getValue());
+    toast('Content copied to clipboard.');
+  };
+
+  initEditor();
 </script>
 </body>
 </html>
