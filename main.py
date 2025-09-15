@@ -36,33 +36,32 @@ from typing import Any, Dict, Generator, List, Optional, Tuple
 
 import httpx
 from flask import Flask, Response, jsonify, request, send_from_directory
+
+# ===================== Load Configuration =====================
+
+try:
+    with open("config.json", "r", encoding="utf-8") as f:
+        CONFIG = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError) as e:
+    print(f"FATAL: Could not load config.json: {e}", file=sys.stderr)
+    sys.exit(1)
 from werkzeug.serving import make_server
 from werkzeug.utils import secure_filename
 
 # ===================== Directories & Config =====================
 
-SESSIONS_DIR = "autogen_sessions"
-WORKSPACE_DIR = "autogen_work_dir"
-TOOLS_DIR = "tools"
+SESSIONS_DIR = CONFIG["sessions_dir"]
+WORKSPACE_DIR = CONFIG["workspace_dir"]
+TOOLS_DIR = CONFIG["tools_dir"]
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 os.makedirs(WORKSPACE_DIR, exist_ok=True)
 os.makedirs(TOOLS_DIR, exist_ok=True)
 
-ALLOWED_UPLOAD_MIMES = {
-    "text/plain",
-    "application/json",
-    "text/markdown",
-    "text/x-python",
-    "application/octet-stream",
-}
-MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", 10 * 1024 * 1024))  # 10 MB
+ALLOWED_UPLOAD_MIMES = set(CONFIG["allowed_upload_mimes"])
+MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", CONFIG["max_upload_bytes"]))
+DEFAULT_MODEL = os.environ.get("DEFAULT_MODEL", CONFIG["default_model"])
+COLLAB_GUIDANCE = CONFIG["collab_guidance"]
 
-DEFAULT_MODEL = os.environ.get("DEFAULT_MODEL", "qwen3:8b")
-
-COLLAB_GUIDANCE = (
-    "Collaborate with the team. Do not try to solve the entire task alone. "
-    "Never emit TERMINATE. Suggest explicit next-role handoffs. Keep outputs concise."
-)
 
 # ===================== Logging =====================
 
@@ -90,12 +89,12 @@ log.addHandler(_handler)
 
 def _make_httpx_client() -> httpx.Client:
     # httpx doesn't expose urllib3.Retry; use sane timeouts & manual backoff in stream loop.
-    return httpx.Client(timeout=httpx.Timeout(30.0, read=300.0))
+    return httpx.Client(timeout=httpx.Timeout(CONFIG["httpx_timeout"]["connect"], read=CONFIG["httpx_timeout"]["read"]))
 
 _http = _make_httpx_client()
 
 _ollama_lock = threading.Lock()
-_ollama_host = os.environ.get("OLLAMA_BASE", "http://192.168.86.30:11434").rstrip("/")
+_ollama_host = os.environ.get("OLLAMA_BASE", CONFIG["ollama_base_url"]).rstrip("/")
 
 def set_ollama_host(url: str) -> None:
     global _ollama_host
@@ -109,7 +108,7 @@ def get_ollama_endpoints() -> Tuple[str, str]:
 
 # TTL cache for models
 _models_cache: Dict[str, Any] = {"ts": 0.0, "names": []}
-MODELS_TTL_SEC = 20.0
+MODELS_TTL_SEC = CONFIG["models_ttl_sec"]
 
 # ===================== Flask App =====================
 
