@@ -5,7 +5,6 @@ import os
 import queue
 import time
 from typing import Any, Dict, List, Optional, Tuple
-from typing import Any, Dict
 
 import httpx
 from flask import Flask, Response, jsonify, request, send_from_directory
@@ -23,7 +22,7 @@ from app.config import (
 from app.core import run_orchestrator
 from app.ollama import _http, get_ollama_endpoints, set_ollama_host
 from app.state import state
-from app.utils import tree_listing
+from app.utils import _safe_path, tree_listing
 
 app = Flask(__name__)
 
@@ -160,16 +159,14 @@ def api_save():
     if not path or content is None:
         return jsonify({"error": "missing path or content"}), 400
 
-    # Basic security check to prevent directory traversal
-    if '..' in path or path.startswith('/'):
-        return jsonify({"error": "invalid path"}), 400
-
-    fp = os.path.join(WORKSPACE_DIR, path)
     try:
+        fp = _safe_path(path)
         os.makedirs(os.path.dirname(fp), exist_ok=True)
         with open(fp, "w", encoding="utf-8") as f:
             f.write(content)
         return jsonify({"ok": True, "file": path}), 200
+    except ValueError as e:
+        return jsonify({"error": "invalid_path", "message": str(e)}), 400
     except Exception as e:
         return jsonify({"error": "write_failed", "message": str(e)}), 500
 
@@ -200,14 +197,20 @@ def sessions_save():
         json.dump(data, f, indent=2)
     return jsonify({"ok": True, "file": fp}), 201
 
+@app.delete("/api/sessions/<path:name>")
+def sessions_delete(name: str):
+    fp = os.path.join(SESSIONS_DIR, name)
+    if not os.path.exists(fp):
+        return jsonify({"error": "not_found"}), 404
+
+    try:
+        os.remove(fp)
+        return jsonify({"ok": True}), 200
+    except Exception as e:
+        return jsonify({"error": "delete_failed", "message": str(e)}), 500
+
 def _call_ollama(prompt: str, model: str) -> str:
     """Helper to call the Ollama API."""
-    # Mocking for tests
-    if "a function that takes two numbers and returns their sum" in prompt:
-        return "def add(a, b):\\n    return a + b"
-    if "explain the provided code snippet" in prompt and "def add(a, b):" in prompt:
-        return "This is a python function that takes two numbers and returns their sum."
-
     _, generate_url = get_ollama_endpoints()
     if not generate_url:
         log.error("ollama_url_not_set")
@@ -225,33 +228,37 @@ def _call_ollama(prompt: str, model: str) -> str:
         log.error("ollama_call_failed", extra={"error": str(e)})
         return ""
 
-@app.post("/api/ai/generate_code")
-def ai_generate_code():
+@app.post("/api/generate_team")
+def generate_team():
     data = request.json or {}
-    prompt = data.get("prompt")
+    goal = data.get("goal")
     model = data.get("model", DEFAULT_MODEL)
-    if not prompt:
-        return jsonify({"error": "missing_prompt"}), 400
+    if not goal:
+        return jsonify({"error": "missing_goal"}), 400
 
-    system_prompt = "You are a world-class software engineer. Your task is to write code based on the provided comment. Only output the code, with no additional explanation or commentary."
-    full_prompt = f"{system_prompt}\\n\\n---\\n\\n{prompt}"
+    system_prompt = "You are a team-building expert. Based on the following goal, please suggest a team of 2 to 4 agents to achieve it. The team should have a programmer, a reviewer, and other roles as needed. For each agent, provide a name and a one-sentence system message. Your output should be a JSON array of objects, where each object has a 'name' and a 'system' key."
+    full_prompt = f"{system_prompt}\\n\\n---\\n\\nGoal: {goal}"
 
-    code = _call_ollama(full_prompt, model)
-    return jsonify({"code": code})
+    team_str = _call_ollama(full_prompt, model)
+    try:
+        team = json.loads(team_str)
+        return jsonify(team)
+    except json.JSONDecodeError:
+        return jsonify({"error": "failed to generate team", "details": "The model did not return valid JSON."}), 500
 
-@app.post("/api/ai/explain_code")
-def ai_explain_code():
+@app.post("/api/generate_description")
+def generate_description():
     data = request.json or {}
-    code = data.get("code")
+    title = data.get("title")
     model = data.get("model", DEFAULT_MODEL)
-    if not code:
-        return jsonify({"error": "missing_code"}), 400
+    if not title:
+        return jsonify({"error": "missing_title"}), 400
 
-    system_prompt = "You are a world-class software engineer. Your task is to explain the provided code snippet in a clear and concise way."
-    full_prompt = f"{system_prompt}\\n\\n---\\n\\n```\\n{code}\\n```"
+    system_prompt = "You are a helpful assistant. Based on the provided agent title, please generate a one-sentence system message for that agent."
+    full_prompt = f"{system_prompt}\\n\\n---\\n\\nTitle: {title}"
 
-    explanation = _call_ollama(full_prompt, model)
-    return jsonify({"explanation": explanation})
+    description = _call_ollama(full_prompt, model)
+    return jsonify({"description": description})
 
 @app.post("/api/transcript/md")
 def export_md():
@@ -303,7 +310,6 @@ HTML = r"""
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Custom Agent Studio — v10</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.53.0/min/vs/loader.js"></script>
   <style>
     :root{--bg:#0f172a;--panel:#1f2937;--muted:#9ca3af;--text:#e5e7eb;--border:#374151;--chip:#334155;--blue:#2563eb;--blue2:#1d4ed8;--red:#ef4444;--green:#10b981;--amber:#f59e0b}
     *{box-sizing:border-box} body{margin:0;background:#0b1220;color:var(--text);font:14px/1.4 system-ui,Segoe UI,Inter,Arial}
@@ -343,43 +349,6 @@ HTML = r"""
     #thinkbody{max-height:40vh;overflow:auto;padding:10px;white-space:pre-wrap;color:#e0edff}
     #thinkhdr .chip{font-size:12px;background:#092245;color:#93c5fd;border:1px solid #1e40af;padding:2px 6px;border-radius:999px}
     #thinkhdr button{background:#0e1a2b;border:1px solid #2a4066;color:#cfe4ff;border-radius:8px;padding:4px 6px;cursor:pointer}
-
-    /* Editor Modal */
-    #editor-modal {
-      display: none;
-      position: fixed;
-      left: 0;
-      top: 0;
-      width: 100%;
-      height: 100%;
-      background: rgba(0, 0, 0, 0.5);
-      z-index: 1000;
-      align-items: center;
-      justify-content: center;
-    }
-    #editor-container {
-      width: 80%;
-      height: 80%;
-      background: var(--panel);
-      border-radius: 12px;
-      overflow: hidden;
-      display: flex;
-      flex-direction: column;
-    }
-    #editor-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 10px;
-      background: var(--bg);
-      border-bottom: 1px solid var(--border);
-    }
-    #editor-filename {
-      font-weight: 700;
-    }
-    #editor-main {
-      flex: 1;
-    }
   </style>
 </head>
 <body>
@@ -481,27 +450,10 @@ HTML = r"""
         <button id="send" class="btn btn-primary" disabled>Send</button>
       </form>
     </main>
-
-    <!-- Editor Modal -->
-    <div id="editor-modal">
-      <div id="editor-container">
-        <div id="editor-header">
-          <span id="editor-filename"></span>
-          <div style="display:flex; gap:8px;">
-            <button id="editor-copy-path" class="btn btn-neutral">Copy Path</button>
-            <button id="editor-copy-content" class="btn btn-neutral">Copy Content</button>
-            <button id="editor-save" class="btn btn-primary">Save</button>
-            <button id="editor-close" class="btn btn-neutral">Close</button>
-          </div>
-        </div>
-        <div id="editor-main" style="width:100%; height:100%"></div>
-      </div>
-    </div>
-
   </div>
 <script>
   const $=(s)=>document.querySelector(s); const $$=(s)=>Array.from(document.querySelectorAll(s));
-  let agents=[]; let streams={}; let es=null; let manualNames=[]; let lastModels=[]; let editor=null; let currentFile='';
+  let agents=[]; let streams={}; let es=null; let manualNames=[]; let lastModels=[];
   const think = { active:false, buffer:'', open:false, minimized:false };
   function toast(msg){ const t=document.createElement('div'); t.textContent=msg; t.style.cssText='position:fixed;right:12px;bottom:12px;background:#0b213f;color:#cfe4ff;border:1px solid #23406e;padding:10px 12px;border-radius:10px;box-shadow:0 10px 25px rgba(0,0,0,.35)'; document.body.appendChild(t); setTimeout(()=>t.remove(),3000); }
   function setStatus(state){ const S=$('#status'); const map={idle:'Status: Idle', running:'Status: Agents working…', waiting_for_input:'Status: Waiting for input…'}; S.textContent = map[state]||'Status'; $('#fb').disabled = state!=='waiting_for_input'; $('#send').disabled = state!=='waiting_for_input'; }
@@ -585,7 +537,7 @@ function renderTeam(){ const T=$('#team'); if(!agents.length){T.innerHTML='<div 
   $('#add').onclick=()=>{const n=$('#aname').value.trim(); if(!n) return; agents.push({name:n, system:$('#asys').value.trim(), temperature:parseFloat($('#atemp').value)||0.3}); $('#aname').value=''; $('#asys').value=''; renderTeam(); saveSession();};
   $('#fbform').onsubmit=async(e)=>{ e.preventDefault(); const v=$('#fb').value.trim(); if(!v) return; addMsg('You', v, true); await fetch('/user_input',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({message:v})}); $('#fb').value=''; setStatus('running'); };
   async function refreshFiles(){ const r=await fetch('/api/workspace/files'); const d=await r.json(); const F=$('#files'); F.innerHTML = d.length? d.map(x=>`<a style='display:block;padding:6px;border:1px solid #2b3443;border-radius:8px;margin:4px 0;background:#111827' target='_blank' href='${x.path}'>${x.name}</a>`).join('') : '<div style="color:#9ca3af">No files yet.</div>'; }
-  function renderTreeNode(node){ if(node.type==='file'){ return `<li><a href="#" onclick="openEditor('${node.path}')">${node.name}</a></li>`; } let kids=''; if(Array.isArray(node.children)){ kids = '<ul>'+node.children.map(renderTreeNode).join('')+'</ul>'; } return `<li>${node.name}${kids}</li>`; }
+  function renderTreeNode(node){ if(node.type==='file'){ return `<li><a target=\"_blank\" href=\"/workspace/${node.path}\">${node.name}</a></li>`; } let kids=''; if(Array.isArray(node.children)){ kids = '<ul>'+node.children.map(renderTreeNode).join('')+'</ul>'; } return `<li>${node.name}${kids}</li>`; }
   async function refreshTree(){ const r=await fetch('/api/workspace/tree'); const d=await r.json(); $('#tree').innerHTML = '<ul>'+renderTreeNode(d)+'</ul>'; }
   $('#upload').onclick=async()=>{ const f=$('#file').files[0]; if(!f) return; const fd=new FormData(); fd.append('file', f); const r = await fetch('/api/workspace/upload',{method:'POST',body:fd}); if(!r.ok){ const e=await r.json(); toast('Upload failed: '+(e.error||e.message)); } else { toast('Uploaded'); refreshFiles(); refreshTree(); }};
   $('#refresh').onclick=()=>{ refreshFiles(); refreshTree(); };
@@ -646,116 +598,6 @@ function renderTeam(){ const T=$('#team'); if(!agents.length){T.innerHTML='<div 
   $('#goal').oninput = saveSession;
   loadSession();
   setStatus('idle'); buttons(false); renderTeam(); loadModels();
-
-  function initEditor() {
-    window.require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.53.0/min/vs' }});
-    window.require(['vs/editor/editor.main'], () => {
-      editor = monaco.editor.create($('#editor-main'), {
-        value: '',
-        language: 'python',
-        theme: 'vs-dark',
-        automaticLayout: true,
-      });
-
-      editor.addAction({
-        id: 'generate-code',
-        label: 'Generate Code from Comment',
-        contextMenuGroupId: '1_modification',
-        contextMenuOrder: 1,
-        run: async function(ed) {
-          const selection = ed.getSelection();
-          const model = ed.getModel();
-          const text = model.getValueInRange(selection);
-          if (!text) {
-            toast('Please select a comment to generate code from.');
-            return;
-          }
-          toast('Generating code...');
-          const r = await fetch('/api/ai/generate_code', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({prompt: text, model: $('#model').value})
-          });
-          const d = await r.json();
-          if (d.code) {
-            ed.executeEdits('ai-generate', [{
-              range: selection,
-              text: d.code
-            }]);
-          } else {
-            toast('Failed to generate code.');
-          }
-        }
-      });
-
-      editor.addAction({
-        id: 'explain-code',
-        label: 'Explain Selection',
-        precondition: '!!editorHasSelection',
-        contextMenuGroupId: '1_modification',
-        contextMenuOrder: 2,
-        run: async function(ed) {
-          const selection = ed.getSelection();
-          const model = ed.getModel();
-          const text = model.getValueInRange(selection);
-          if (!text) return;
-          toast('Getting explanation...');
-          const r = await fetch('/api/ai/explain_code', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({code: text, model: $('#model').value})
-          });
-          const d = await r.json();
-          if (d.explanation) {
-            alert(d.explanation);
-          } else {
-            toast('Failed to get explanation.');
-          }
-        }
-      });
-    });
-  }
-
-  async function openEditor(path) {
-    currentFile = path;
-    const r = await fetch(`/workspace/${path}`);
-    const content = await r.text();
-    $('#editor-filename').textContent = path;
-    editor.setValue(content);
-    $('#editor-modal').style.display = 'flex';
-  }
-
-  $('#editor-close').onclick = () => {
-    $('#editor-modal').style.display = 'none';
-  };
-
-  $('#editor-save').onclick = async () => {
-    const content = editor.getValue();
-    const r = await fetch('/api/workspace/save', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({path: currentFile, content: content})
-    });
-    if (r.ok) {
-      toast('File saved.');
-      $('#editor-modal').style.display = 'none';
-    } else {
-      const err = await r.json();
-      toast('Save failed: ' + (err.error || err.message));
-    }
-  };
-
-  $('#editor-copy-path').onclick = () => {
-    navigator.clipboard.writeText(currentFile);
-    toast('Path copied to clipboard.');
-  };
-
-  $('#editor-copy-content').onclick = () => {
-    navigator.clipboard.writeText(editor.getValue());
-    toast('Content copied to clipboard.');
-  };
-
-  initEditor();
 </script>
 </body>
 </html>
@@ -763,21 +605,3 @@ function renderTeam(){ const T=$('#team'); if(!agents.length){T.innerHTML='<div 
 @app.get("/")
 def index():
     return Response(HTML, mimetype="text/html")
-_server: Optional[any] = None
-def _shutdown(*_args):
-    try:
-        state.stop()
-        if _server is not None:
-            pass
-    finally:
-        for h in list(log.handlers):
-            try:
-                h.flush()
-            except Exception:
-                pass
-if __name__ == "__main__":
-    print("Starting Custom Agent Studio — v10 — http://127.0.0.1:8080")
-    signal.signal(signal.SIGINT, _shutdown)
-    signal.signal(signal.SIGTERM, _shutdown)
-    _server = make_server("0.0.0.0", 8080, app)
-    _server.serve_forever()
