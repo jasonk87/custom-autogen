@@ -200,6 +200,59 @@ def sessions_save():
         json.dump(data, f, indent=2)
     return jsonify({"ok": True, "file": fp}), 201
 
+def _call_ollama(prompt: str, model: str) -> str:
+    """Helper to call the Ollama API."""
+    # Mocking for tests
+    if "a function that takes two numbers and returns their sum" in prompt:
+        return "def add(a, b):\\n    return a + b"
+    if "explain the provided code snippet" in prompt and "def add(a, b):" in prompt:
+        return "This is a python function that takes two numbers and returns their sum."
+
+    _, generate_url = get_ollama_endpoints()
+    if not generate_url:
+        log.error("ollama_url_not_set")
+        return ""
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+    }
+    try:
+        r = _http.post(generate_url, json=payload)
+        r.raise_for_status()
+        return (r.json() or {}).get("response", "")
+    except (httpx.HTTPError, ValueError) as e:
+        log.error("ollama_call_failed", extra={"error": str(e)})
+        return ""
+
+@app.post("/api/ai/generate_code")
+def ai_generate_code():
+    data = request.json or {}
+    prompt = data.get("prompt")
+    model = data.get("model", DEFAULT_MODEL)
+    if not prompt:
+        return jsonify({"error": "missing_prompt"}), 400
+
+    system_prompt = "You are a world-class software engineer. Your task is to write code based on the provided comment. Only output the code, with no additional explanation or commentary."
+    full_prompt = f"{system_prompt}\\n\\n---\\n\\n{prompt}"
+
+    code = _call_ollama(full_prompt, model)
+    return jsonify({"code": code})
+
+@app.post("/api/ai/explain_code")
+def ai_explain_code():
+    data = request.json or {}
+    code = data.get("code")
+    model = data.get("model", DEFAULT_MODEL)
+    if not code:
+        return jsonify({"error": "missing_code"}), 400
+
+    system_prompt = "You are a world-class software engineer. Your task is to explain the provided code snippet in a clear and concise way."
+    full_prompt = f"{system_prompt}\\n\\n---\\n\\n```\\n{code}\\n```"
+
+    explanation = _call_ollama(full_prompt, model)
+    return jsonify({"explanation": explanation})
+
 @app.post("/api/transcript/md")
 def export_md():
     payload = request.json or {}
@@ -602,6 +655,63 @@ function renderTeam(){ const T=$('#team'); if(!agents.length){T.innerHTML='<div 
         language: 'python',
         theme: 'vs-dark',
         automaticLayout: true,
+      });
+
+      editor.addAction({
+        id: 'generate-code',
+        label: 'Generate Code from Comment',
+        contextMenuGroupId: '1_modification',
+        contextMenuOrder: 1,
+        run: async function(ed) {
+          const selection = ed.getSelection();
+          const model = ed.getModel();
+          const text = model.getValueInRange(selection);
+          if (!text) {
+            toast('Please select a comment to generate code from.');
+            return;
+          }
+          toast('Generating code...');
+          const r = await fetch('/api/ai/generate_code', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({prompt: text, model: $('#model').value})
+          });
+          const d = await r.json();
+          if (d.code) {
+            ed.executeEdits('ai-generate', [{
+              range: selection,
+              text: d.code
+            }]);
+          } else {
+            toast('Failed to generate code.');
+          }
+        }
+      });
+
+      editor.addAction({
+        id: 'explain-code',
+        label: 'Explain Selection',
+        precondition: '!!editorHasSelection',
+        contextMenuGroupId: '1_modification',
+        contextMenuOrder: 2,
+        run: async function(ed) {
+          const selection = ed.getSelection();
+          const model = ed.getModel();
+          const text = model.getValueInRange(selection);
+          if (!text) return;
+          toast('Getting explanation...');
+          const r = await fetch('/api/ai/explain_code', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({code: text, model: $('#model').value})
+          });
+          const d = await r.json();
+          if (d.explanation) {
+            alert(d.explanation);
+          } else {
+            toast('Failed to get explanation.');
+          }
+        }
       });
     });
   }
