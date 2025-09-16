@@ -146,9 +146,12 @@ def api_upload():
         if not secure_filename(f.filename).endswith((".txt", ".md", ".json", ".py")):
             return jsonify({"error": "mime_blocked", "mime": mime}), 415
     fn = secure_filename(f.filename)
-    fp = os.path.join(WORKSPACE_DIR, fn)
-    os.makedirs(os.path.dirname(fp), exist_ok=True)
-    f.save(fp)
+    try:
+        fp = _safe_path(fn)
+        os.makedirs(os.path.dirname(fp), exist_ok=True)
+        f.save(fp)
+    except ValueError as e:
+        return jsonify({"error": "invalid_path", "message": str(e)}), 400
     return jsonify({"ok": True, "file": fn, "bytes": size})
 
 @app.post("/api/workspace/save")
@@ -277,10 +280,13 @@ def export_md():
         lines.append("")
     md = "\n".join(lines)
     fn = f"transcript_{int(time.time())}.md"
-    fp = os.path.join(WORKSPACE_DIR, fn)
-    with open(fp, "w", encoding="utf-8") as f:
-        f.write(md)
-    return jsonify({"ok": True, "file": f"/workspace/{fn}"})
+    try:
+        fp = _safe_path(fn)
+        with open(fp, "w", encoding="utf-8") as f:
+            f.write(md)
+        return jsonify({"ok": True, "file": f"/workspace/{fn}"})
+    except ValueError as e:
+        return jsonify({"error": "invalid_path", "message": str(e)}), 400
 
 @app.post("/api/transcript/html")
 def export_html():
@@ -297,10 +303,13 @@ def export_html():
         parts.append(f"<div><strong>{who}</strong></div><div class='b'>{text}</div>")
     html = "\n".join(parts)
     fn = f"transcript_{int(time.time())}.html"
-    fp = os.path.join(WORKSPACE_DIR, fn)
-    with open(fp, "w", encoding="utf-8") as f:
-        f.write(html)
-    return jsonify({"ok": True, "file": f"/workspace/{fn}"})
+    try:
+        fp = _safe_path(fn)
+        with open(fp, "w", encoding="utf-8") as f:
+            f.write(html)
+        return jsonify({"ok": True, "file": f"/workspace/{fn}"})
+    except ValueError as e:
+        return jsonify({"error": "invalid_path", "message": str(e)}), 400
 
 
 HTML = r"""
