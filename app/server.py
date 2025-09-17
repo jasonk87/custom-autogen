@@ -5,6 +5,7 @@ import os
 import queue
 import time
 from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict
 
 import httpx
 from flask import Flask, Response, jsonify, request, send_from_directory
@@ -22,7 +23,7 @@ from app.config import (
 from app.core import run_orchestrator
 from app.ollama import _http, get_ollama_endpoints, set_ollama_host
 from app.state import state
-from app.utils import _safe_path, tree_listing
+from app.utils import tree_listing
 
 app = Flask(__name__)
 
@@ -146,32 +147,10 @@ def api_upload():
         if not secure_filename(f.filename).endswith((".txt", ".md", ".json", ".py")):
             return jsonify({"error": "mime_blocked", "mime": mime}), 415
     fn = secure_filename(f.filename)
-    try:
-        fp = _safe_path(fn)
-        os.makedirs(os.path.dirname(fp), exist_ok=True)
-        f.save(fp)
-    except ValueError as e:
-        return jsonify({"error": "invalid_path", "message": str(e)}), 400
+    fp = os.path.join(WORKSPACE_DIR, fn)
+    os.makedirs(os.path.dirname(fp), exist_ok=True)
+    f.save(fp)
     return jsonify({"ok": True, "file": fn, "bytes": size})
-
-@app.post("/api/workspace/save")
-def api_save():
-    data = request.json or {}
-    path = data.get("path")
-    content = data.get("content")
-    if not path or content is None:
-        return jsonify({"error": "missing path or content"}), 400
-
-    try:
-        fp = _safe_path(path)
-        os.makedirs(os.path.dirname(fp), exist_ok=True)
-        with open(fp, "w", encoding="utf-8") as f:
-            f.write(content)
-        return jsonify({"ok": True, "file": path}), 200
-    except ValueError as e:
-        return jsonify({"error": "invalid_path", "message": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": "write_failed", "message": str(e)}), 500
 
 @app.get("/workspace/<path:fn>")
 def ws_file(fn: str):
@@ -200,69 +179,6 @@ def sessions_save():
         json.dump(data, f, indent=2)
     return jsonify({"ok": True, "file": fp}), 201
 
-@app.delete("/api/sessions/<path:name>")
-def sessions_delete(name: str):
-    fp = os.path.join(SESSIONS_DIR, name)
-    if not os.path.exists(fp):
-        return jsonify({"error": "not_found"}), 404
-
-    try:
-        os.remove(fp)
-        return jsonify({"ok": True}), 200
-    except Exception as e:
-        return jsonify({"error": "delete_failed", "message": str(e)}), 500
-
-def _call_ollama(prompt: str, model: str) -> str:
-    """Helper to call the Ollama API."""
-    _, generate_url = get_ollama_endpoints()
-    if not generate_url:
-        log.error("ollama_url_not_set")
-        return ""
-    payload = {
-        "model": model,
-        "prompt": prompt,
-        "stream": False,
-    }
-    try:
-        r = _http.post(generate_url, json=payload)
-        r.raise_for_status()
-        return (r.json() or {}).get("response", "")
-    except (httpx.HTTPError, ValueError) as e:
-        log.error("ollama_call_failed", extra={"error": str(e)})
-        return ""
-
-@app.post("/api/generate_team")
-def generate_team():
-    data = request.json or {}
-    goal = data.get("goal")
-    model = data.get("model", DEFAULT_MODEL)
-    if not goal:
-        return jsonify({"error": "missing_goal"}), 400
-
-    system_prompt = "You are a team-building expert. Based on the following goal, please suggest a team of 2 to 4 agents to achieve it. The team should have a programmer, a reviewer, and other roles as needed. For each agent, provide a name and a one-sentence system message. Your output should be a JSON array of objects, where each object has a 'name' and a 'system' key."
-    full_prompt = f"{system_prompt}\\n\\n---\\n\\nGoal: {goal}"
-
-    team_str = _call_ollama(full_prompt, model)
-    try:
-        team = json.loads(team_str)
-        return jsonify(team)
-    except json.JSONDecodeError:
-        return jsonify({"error": "failed to generate team", "details": "The model did not return valid JSON."}), 500
-
-@app.post("/api/generate_description")
-def generate_description():
-    data = request.json or {}
-    title = data.get("title")
-    model = data.get("model", DEFAULT_MODEL)
-    if not title:
-        return jsonify({"error": "missing_title"}), 400
-
-    system_prompt = "You are a helpful assistant. Based on the provided agent title, please generate a one-sentence system message for that agent."
-    full_prompt = f"{system_prompt}\\n\\n---\\n\\nTitle: {title}"
-
-    description = _call_ollama(full_prompt, model)
-    return jsonify({"description": description})
-
 @app.post("/api/transcript/md")
 def export_md():
     payload = request.json or {}
@@ -280,13 +196,10 @@ def export_md():
         lines.append("")
     md = "\n".join(lines)
     fn = f"transcript_{int(time.time())}.md"
-    try:
-        fp = _safe_path(fn)
-        with open(fp, "w", encoding="utf-8") as f:
-            f.write(md)
-        return jsonify({"ok": True, "file": f"/workspace/{fn}"})
-    except ValueError as e:
-        return jsonify({"error": "invalid_path", "message": str(e)}), 400
+    fp = os.path.join(WORKSPACE_DIR, fn)
+    with open(fp, "w", encoding="utf-8") as f:
+        f.write(md)
+    return jsonify({"ok": True, "file": f"/workspace/{fn}"})
 
 @app.post("/api/transcript/html")
 def export_html():
@@ -303,13 +216,10 @@ def export_html():
         parts.append(f"<div><strong>{who}</strong></div><div class='b'>{text}</div>")
     html = "\n".join(parts)
     fn = f"transcript_{int(time.time())}.html"
-    try:
-        fp = _safe_path(fn)
-        with open(fp, "w", encoding="utf-8") as f:
-            f.write(html)
-        return jsonify({"ok": True, "file": f"/workspace/{fn}"})
-    except ValueError as e:
-        return jsonify({"error": "invalid_path", "message": str(e)}), 400
+    fp = os.path.join(WORKSPACE_DIR, fn)
+    with open(fp, "w", encoding="utf-8") as f:
+        f.write(html)
+    return jsonify({"ok": True, "file": f"/workspace/{fn}"})
 
 
 HTML = r"""
@@ -614,3 +524,21 @@ function renderTeam(){ const T=$('#team'); if(!agents.length){T.innerHTML='<div 
 @app.get("/")
 def index():
     return Response(HTML, mimetype="text/html")
+_server: Optional[any] = None
+def _shutdown(*_args):
+    try:
+        state.stop()
+        if _server is not None:
+            pass
+    finally:
+        for h in list(log.handlers):
+            try:
+                h.flush()
+            except Exception:
+                pass
+if __name__ == "__main__":
+    print("Starting Custom Agent Studio — v10 — http://127.0.0.1:8080")
+    signal.signal(signal.SIGINT, _shutdown)
+    signal.signal(signal.SIGTERM, _shutdown)
+    _server = make_server("0.0.0.0", 8080, app)
+    _server.serve_forever()

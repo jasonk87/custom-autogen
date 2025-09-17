@@ -20,10 +20,12 @@ class Agent:
         self.system = system
         self.temperature = temperature
 
-    def stream(self, history: List[Dict[str, str]], model: str) -> Generator[str, None, None]:
+    def stream(self, history: List[Dict[str, str]], model: str, moderator_message: Optional[str] = None) -> Generator[str, None, None]:
         _, chat_url = get_ollama_endpoints()
         roster = ", ".join(sorted({m.get("name") for m in history if m.get("name")} - {None})) or ""
         sysmsg = self.system + "\n\n" + COLLAB_GUIDANCE + (f"\nTeam: {roster}" if roster else "")
+        if moderator_message:
+            sysmsg = f"Moderator feedback: {moderator_message}\n\n{sysmsg}"
         messages = [{"role": "system", "content": sysmsg}] + history
 
         attempts = 4
@@ -71,7 +73,7 @@ class HumanAdmin(Agent):
             "You are the human. Provide brief feedback or code. Use TERMINATE to finish when satisfied.",
         )
 
-    def stream(self, history: List[Dict[str, str]], model: str):  # type: ignore[override]
+    def stream(self, history: List[Dict[str, str]], model: str, moderator_message: Optional[str] = None):  # type: ignore[override]
         msg = state.user_input_q.get()
         if msg is None:
             return
@@ -177,6 +179,63 @@ class Manager:
                 return n
         return None
 
+
+class Moderator:
+    """
+    A class to moderate the conversation and provide private feedback to agents.
+    """
+
+    def moderate(self, history: List[Dict[str, str]], goal: str, model: str) -> Optional[str]:
+        """
+        Reviews the conversation and returns a private corrective message if needed.
+        """
+        _, chat_url = get_ollama_endpoints()
+
+        history_str = "\n".join([f"{m.get('name') or m.get('role')}: {m.get('content')}" for m in history])
+
+        system_prompt = f"""You are a conversation moderator for a team of AI agents. Your role is to ensure the team stays on track to achieve the following goal: {goal}.
+
+You will be given the full conversation history. Your task is to determine if the conversation is deviating from the goal.
+
+- If the conversation is on track, or if the agents are having a brief, constructive side-conversation (e.g., complimenting each other), you should not intervene. In this case, your response should be "None".
+- If an agent is not following its instructions, or if the conversation is going off-topic, you should provide a brief, private, and corrective message to the next agent. This message should guide the agent back to the task at hand.
+- Do not be overly strict. Allow for some natural conversation flow.
+- Your feedback should be a single line of text.
+"""
+
+        prompt = f"""Conversation History:
+{history_str}
+
+Based on the conversation history and the goal, what is your private feedback for the next agent? If no intervention is needed, respond with "None".
+"""
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt}
+        ]
+
+        try:
+            r = _http.post(
+                chat_url,
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "options": {"temperature": 0.1},
+                    "stream": False,
+                },
+            )
+            r.raise_for_status()
+            response_data = r.json()
+            feedback = response_data.get("message", {}).get("content", "").strip()
+
+            if feedback.lower() == "none" or not feedback:
+                return None
+
+            return feedback
+        except Exception as e:
+            log.warning("moderator_failed", extra={"extra": {"err": str(e)}})
+            return None
+
 def default_system(name: str) -> str:
     n = name.lower()
     if any(k in n for k in ["programmer", "developer", "coder", "engineer"]):
@@ -200,6 +259,8 @@ def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any]], ma
         agents["Human_Admin"] = HumanAdmin()
         names = list(agents.keys())
         mgr = Manager(names, manager_mode)
+        moderator = Moderator()
+        moderator_feedback: Optional[str] = None
 
         history.append({"role": "user", "content": f"Goal: {goal}"})
         out_q.put(json.dumps({"type": "chat", "sender": "System", "message": f"Goal set: {goal}"}))
@@ -223,7 +284,7 @@ def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any]], ma
 
             assembled: List[str] = []
             try:
-                for delta in speaker.stream(history, model) or []:
+                for delta in speaker.stream(history, model, moderator_feedback) or []:
                     if state.stop_event.is_set():
                         break
                     assembled.append(delta)
@@ -261,6 +322,10 @@ def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any]], ma
             if mgr.should_terminate():
                 out_q.put(json.dumps({"type": "chat", "sender": "Manager", "message": "All required roles completed post-artifact. TERMINATE"}))
                 break
+
+            moderator_feedback = moderator.moderate(history, goal, model)
+            if moderator_feedback:
+                log.info("moderator_intervention", extra={"extra": {"feedback": moderator_feedback}})
 
         out_q.put(json.dumps({"type": "status", "state": "idle"}))
 
