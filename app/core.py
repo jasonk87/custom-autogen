@@ -7,6 +7,8 @@ from app.config import COLLAB_GUIDANCE
 from app.ollama import get_ollama_endpoints, _http
 from app.state import state
 from app.tools import TOOLS
+from app.tool_schemas import TOOL_SCHEMAS
+import jsonschema
 from app.utils import (
     CODE_FENCE_RE,
     ROLE_HINTS,
@@ -277,47 +279,72 @@ def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any]], ma
             out_q.put(json.dumps({"type": "chat", "sender": "Manager", "message": f"Next: {next_name}  ·  reason: {rationale}"}))
 
             speaker = agents[next_name]
-            msg_id = f"t{turn}_{next_name}"
 
-            out_q.put(json.dumps({"type": "status", "state": "waiting_for_input" if isinstance(speaker, HumanAdmin) else "running"}))
-            out_q.put(json.dumps({"type": "stream_start", "id": msg_id, "sender": next_name}))
+            # Inner loop for agent's turn with tool calls
+            for _ in range(5): # Max 5 tool calls per turn
+                msg_id = f"t{turn}_{next_name}"
+                out_q.put(json.dumps({"type": "status", "state": "waiting_for_input" if isinstance(speaker, HumanAdmin) else "running"}))
+                out_q.put(json.dumps({"type": "stream_start", "id": msg_id, "sender": next_name}))
 
-            assembled: List[str] = []
-            try:
-                for delta in speaker.stream(history, model, moderator_feedback) or []:
-                    if state.stop_event.is_set():
-                        break
-                    assembled.append(delta)
-                    out_q.put(json.dumps({"type": "token", "id": msg_id, "delta": delta}))
-            except Exception as e:
-                out_q.put(json.dumps({"type": "chat", "sender": next_name, "message": f"[stream error] {e}"}))
-            finally:
-                out_q.put(json.dumps({"type": "stream_end", "id": msg_id}))
-
-            full_msg = ''.join(assembled)
-
-            if next_name != "Human_Admin" and "TERMINATE" in (full_msg or "").upper():
-                log.info("terminate_ignored", extra={"extra": {"by": next_name}})
-                full_msg = full_msg.replace("TERMINATE", "")
-
-            history.append({"role": "assistant", "name": next_name, "content": full_msg})
-            mgr.note_message(next_name, full_msg)
-
-            for m in TOOL_RE.finditer(full_msg or ""):
-                tool_name = m.group("name").strip()
+                assembled: List[str] = []
                 try:
-                    args = json.loads(m.group("body"))
-                    fn = TOOLS.get(tool_name)
-                    if not fn:
-                        out_q.put(json.dumps({"type": "chat", "sender": "tool", "message": f"unknown tool: {tool_name}"}))
-                    else:
-                        log.info("tool_call", extra={"extra": {"tool": tool_name, "args": args}})
-                        res = fn(**args)
-                        if not isinstance(res, str):
-                            res = json.dumps(res, indent=2)
-                        out_q.put(json.dumps({"type": "chat", "sender": "tool", "message": f"{tool_name} ->\n{res}"}))
+                    for delta in speaker.stream(history, model, moderator_feedback) or []:
+                        if state.stop_event.is_set():
+                            break
+                        assembled.append(delta)
+                        out_q.put(json.dumps({"type": "token", "id": msg_id, "delta": delta}))
                 except Exception as e:
-                    out_q.put(json.dumps({"type": "chat", "sender": "tool", "message": f"{tool_name} error: {e}"}))
+                    out_q.put(json.dumps({"type": "chat", "sender": next_name, "message": f"[stream error] {e}"}))
+                finally:
+                    out_q.put(json.dumps({"type": "stream_end", "id": msg_id}))
+
+                full_msg = ''.join(assembled)
+
+                if next_name != "Human_Admin" and "TERMINATE" in (full_msg or "").upper():
+                    log.info("terminate_ignored", extra={"extra": {"by": next_name}})
+                    full_msg = full_msg.replace("TERMINATE", "")
+
+                history.append({"role": "assistant", "name": next_name, "content": full_msg})
+
+                tool_calls = list(TOOL_RE.finditer(full_msg or ""))
+                if not tool_calls:
+                    mgr.note_message(next_name, full_msg)
+                    break # End of agent's turn
+
+                # Execute tools and feed back results
+                for m in tool_calls:
+                    tool_name = m.group("name").strip()
+                    try:
+                        args = json.loads(m.group("body"))
+
+                        # Validate args against schema
+                        schema = TOOL_SCHEMAS.get(tool_name)
+                        if schema:
+                            jsonschema.validate(instance=args, schema=schema)
+
+                        fn = TOOLS.get(tool_name)
+                        if not fn:
+                             res = f"unknown tool: {tool_name}"
+                        else:
+                            log.info("tool_call", extra={"extra": {"tool": tool_name, "args": args}})
+                            res = fn(**args)
+                            if not isinstance(res, str):
+                                res = json.dumps(res, indent=2)
+
+                        out_q.put(json.dumps({"type": "chat", "sender": "tool", "message": f"{tool_name} ->\n{res}"}))
+                        history.append({"role": "tool", "name": tool_name, "content": res})
+
+                    except jsonschema.ValidationError as e:
+                        error_msg = f"invalid arguments for tool {tool_name}: {e.message}"
+                        out_q.put(json.dumps({"type": "chat", "sender": "tool", "message": error_msg}))
+                        history.append({"role": "tool", "name": tool_name, "content": error_msg})
+                    except Exception as e:
+                        error_msg = f"{tool_name} error: {e}"
+                        out_q.put(json.dumps({"type": "chat", "sender": "tool", "message": error_msg}))
+                        history.append({"role": "tool", "name": tool_name, "content": error_msg})
+
+                # After tool calls, the same agent gets to go again immediately
+                moderator_feedback = None # Clear moderator feedback after one use
 
             if mgr.should_terminate():
                 out_q.put(json.dumps({"type": "chat", "sender": "Manager", "message": "All required roles completed post-artifact. TERMINATE"}))
