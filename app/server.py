@@ -386,7 +386,7 @@ HTML = r"""
         if(!think.active){
           const i = c.indexOf('<think>');
           if(i===-1){
-            if(think.open && think.buffer.length>0){ collapseThinkDock(); }
+            if(think.open && think.buffer.length>0){ closeThinkDock(); }
             break;
           }
           c = c.slice(i+7);
@@ -399,7 +399,7 @@ HTML = r"""
             c = c.slice(j+8);
             think.active = false; streams[id] && (streams[id].thinkPhase=false);
             renderThink();
-            if(c.trim().length>0){ collapseThinkDock(); }
+            if(c.trim().length>0){ closeThinkDock(); }
           }
         }
       }
@@ -443,7 +443,7 @@ function renderTeam(){ const T=$('#team'); if(!agents.length){T.innerHTML='<div 
         const d = JSON.parse(ev.data);
         if(d.type==='status'){ setStatus(d.state); }
         else if(d.type==='chat'){ addMsg(d.sender, d.message, false); }
-        else if(d.type==='stream_start'){ addMsg(d.sender,'',false,d.id); }
+        else if(d.type==='stream_start'){ closeThinkDock(); addMsg(d.sender,'',false,d.id); }
         else if(d.type==='token'){ appendToken(d.id, d.delta); }
         else if(d.type==='stream_end'){ /* no-op */ }
       }catch(e){ /* keepalive ping or partial */ }
