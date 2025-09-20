@@ -119,10 +119,13 @@ class Manager:
             self.last_artifact_turn = self.turn
             self.has_reviewed_since_artifact = False
             self.has_ux_since_artifact = False
+
+        is_meaningful = content and content.strip()
+
         role = self.roles.get(speaker, "other")
-        if role == "reviewer" and self.last_artifact_turn >= 0:
+        if role == "reviewer" and self.last_artifact_turn >= 0 and is_meaningful:
             self.has_reviewed_since_artifact = True
-        if role == "ux" and self.last_artifact_turn >= 0:
+        if role == "ux" and self.last_artifact_turn >= 0 and is_meaningful:
             self.has_ux_since_artifact = True
         self.turn += 1
 

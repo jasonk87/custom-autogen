@@ -414,77 +414,7 @@ HTML = r"""
   function renderThink(){ if(!think.open){ return; } const body=$('#thinkbody'); body.textContent=think.buffer||''; $('#thinklen').textContent=(think.buffer||'').length+' chars'; if(think.minimized){ body.style.display='none'; } else { body.style.display='block'; } }
   $('#thinkmin').onclick=()=>{ if(think.minimized) expandThinkDock(); else collapseThinkDock(); };
   $('#thinkclose').onclick=()=>{ closeThinkDock(); };
-function renderTeam() {
-    const teamContainer = $('#team');
-    if (!agents.length) {
-      teamContainer.innerHTML = '<div style="color:#9ca3af">Add at least two agents.</div>';
-      return;
-    }
-
-    teamContainer.innerHTML = agents.map((agent, i) => `
-      <div class='team-item'>
-        <input data-i='${i}' class='name' value='${agent.name}' style='width:120px' />
-        <input data-i='${i}' class='sys' value='${agent.system || ""}' placeholder='system message' />
-        <input data-i='${i}' class='num' type='number' step='0.1' min='0' max='2' value='${agent.temperature ?? 0.3}' />
-        <button data-i='${i}' class='btn btn-neutral up'>▲</button>
-        <button data-i='${i}' class='btn btn-neutral down'>▼</button>
-        <button data-i='${i}' class='btn btn-danger rm'>✕</button>
-      </div>
-    `).join('');
-
-    // Add event listeners for editing agent properties
-    $$('.name').forEach(el => {
-      el.onchange = () => {
-        agents[el.dataset.i].name = el.value;
-        saveSession();
-      };
-    });
-
-    $$('.sys').forEach(el => {
-      el.onchange = () => {
-        agents[el.dataset.i].system = el.value;
-        saveSession();
-      };
-    });
-
-    $$('.num').forEach(el => {
-      el.onchange = () => {
-        agents[el.dataset.i].temperature = parseFloat(el.value || '0.3');
-        saveSession();
-      };
-    });
-
-    // Add event listeners for team management buttons
-    $$('.rm').forEach(el => {
-      el.onclick = () => {
-        agents.splice(+el.dataset.i, 1);
-        renderTeam();
-        saveSession();
-      };
-    });
-
-    $$('.up').forEach(el => {
-      el.onclick = () => {
-        const i = +el.dataset.i;
-        if (i > 0) {
-          [agents[i - 1], agents[i]] = [agents[i], agents[i - 1]];
-          renderTeam();
-          saveSession();
-        }
-      };
-    });
-
-    $$('.down').forEach(el => {
-      el.onclick = () => {
-        const i = +el.dataset.i;
-        if (i < agents.length - 1) {
-          [agents[i + 1], agents[i]] = [agents[i], agents[i + 1]];
-          renderTeam();
-          saveSession();
-        }
-      };
-    });
-  }
+function renderTeam(){ const T=$('#team'); if(!agents.length){T.innerHTML='<div style="color:#9ca3af">Add at least two agents.</div>';return} T.innerHTML=agents.map((a,i)=>`<div class='team-item'> <input data-i='${i}' class='name' value='${a.name}' style='width:120px' /> <input data-i='${i}' class='sys' value='${a.system||""}' placeholder='system message' /> <input data-i='${i}' class='num' type='number' step='0.1' min='0' max='2' value='${a.temperature??0.3}' /> <button data-i='${i}' class='btn btn-neutral up'>▲</button> <button data-i='${i}' class='btn btn-neutral down'>▼</button> <button data-i='${i}' class='btn btn-danger rm'>✕</button> </div>`).join(''); $$('.name').forEach(e=>e.onchange=()=>{agents[e.dataset.i].name=e.value;saveSession();}); $$('.sys').forEach(e=>e.onchange=()=>{agents[e.dataset.i].system=e.value;saveSession();}); $$('.num').forEach(e=>e.onchange=()=>{agents[e.dataset.i].temperature=parseFloat(e.value||'0.3');saveSession();}); $$('.rm').forEach(e=>e.onclick=()=>{agents.splice(+e.dataset.i,1); renderTeam(); saveSession();}); $$('.up').forEach(e=>e.onclick=()=>{const i=+e.dataset.i; if(i>0){[agents[i-1],agents[i]]=[agents[i],agents[i-1]]; renderTeam(); saveSession();}}); $$('.down').forEach(e=>e.onclick=()=>{const i=+e.dataset.i; if(i<agents.length-1){[agents[i+1],agents[i]]=[agents[i],agents[i+1]]; renderTeam(); saveSession();}}); }
   function buttons(running){
     const A=$('#actions');
     if(running){
