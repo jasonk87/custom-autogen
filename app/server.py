@@ -22,6 +22,7 @@ from app.config import (
 )
 from app.core import run_orchestrator
 from app.ollama import _http, get_ollama_endpoints, set_ollama_host
+from app.scenario import generate_agents_from_scenario
 from app.state import state
 from app.utils import tree_listing
 
@@ -89,6 +90,21 @@ def user_input():
     except Exception:
         pass
     return jsonify({"ok": True})
+
+@app.post("/api/scenario/generate")
+async def scenario_generate():
+    data = await request.get_json()
+    scenario = data.get("scenario")
+    model = data.get("model")
+    if not scenario:
+        return jsonify({"error": "missing_scenario"}), 400
+
+    try:
+        agents = await generate_agents_from_scenario(scenario, model)
+        return jsonify(agents)
+    except Exception as e:
+        log.error("failed_to_generate_agents", error=e)
+        return jsonify({"error": str(e)}), 500
 
 @app.post("/choose_next")
 def choose_next():
@@ -325,6 +341,11 @@ HTML = r"""
             <label>Human Proxy</label>
             <input id="human-proxy" type="checkbox" />
           </div>
+        </div>
+        <div class="card">
+          <div style="font-weight:700;margin-bottom:6px">Scenario Mode</div>
+          <textarea id="scenario" placeholder="Describe a scenario, e.g. 'two presidents debating climate change' or 'a team of developers building a web app'"></textarea>
+          <button id="generate-agents" class="btn btn-primary" style="margin-top:6px">Create Agents from Scenario</button>
         </div>
         <div class="group">
           <label>Team Goal</label>
@@ -586,6 +607,36 @@ function renderTeam() {
     $('#asys').value='';
     renderTeam();
     saveSession();
+  };
+  $('#generate-agents').onclick=async()=>{
+    const scenario = $('#scenario').value.trim();
+    if (!scenario) {
+      toast('Please enter a scenario description.');
+      return;
+    }
+    const btn = $('#generate-agents');
+    btn.disabled = true;
+    btn.textContent = 'Generating...';
+    try {
+      const r = await fetch('/api/scenario/generate', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({scenario, model: $('#model').value})
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(()=>({error:'Request failed'}));
+        throw new Error(err.error);
+      }
+      const newAgents = await r.json();
+      agents = newAgents;
+      renderTeam();
+      toast('Agents generated successfully.');
+    } catch (e) {
+      toast('Failed to generate agents: ' + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Create Agents from Scenario';
+    }
   };
   $('#fbform').onsubmit=async(e)=>{ e.preventDefault(); const v=$('#fb').value.trim(); if(!v) return; addMsg('You', v, true); await fetch('/user_input',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({message:v})}); $('#fb').value=''; setStatus('running'); };
   async function refreshFiles(){ const r=await fetch('/api/workspace/files'); const d=await r.json(); const F=$('#files'); F.innerHTML = d.length? d.map(x=>`<a style='display:block;padding:6px;border:1px solid #2b3443;border-radius:8px;margin:4px 0;background:#111827' target='_blank' href='${x.path}'>${x.name}</a>`).join('') : '<div style="color:#9ca3af">No files yet.</div>'; }
