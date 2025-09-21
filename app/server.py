@@ -30,8 +30,10 @@ app = Flask(__name__)
 _models_cache: Dict[str, Any] = {"ts": 0.0, "names": []}
 
 
+import asyncio
+
 @app.get("/stream")
-def stream():
+async def stream():
     model = request.args.get("model", DEFAULT_MODEL)
     goal_b64 = request.args.get("goal", "")
     agents_b64 = request.args.get("agents", "")
@@ -46,7 +48,13 @@ def stream():
     except Exception:
         agents_cfg = []
     out_q: "queue.Queue[str]" = queue.Queue()
-    state.start(run_orchestrator, (goal, model, agents_cfg, manager_mode, out_q, max_turns))
+
+    # We need to run the orchestrator in a separate thread with its own event loop
+    def run_async_orchestrator():
+        asyncio.run(run_orchestrator(goal, model, agents_cfg, manager_mode, out_q, max_turns))
+
+    state.start(run_async_orchestrator, ())
+
     def gen():
         last_ping = time.time()
         while True:

@@ -13,7 +13,9 @@ Open:
 """
 
 import signal
-from werkzeug.serving import make_server
+import asyncio
+from hypercorn.config import Config
+from hypercorn.asyncio import serve
 
 # Initialize application modules. The order of these imports matters.
 # `app.config` must be first.
@@ -45,6 +47,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
 
-    # Create and run the server
-    server = make_server("0.0.0.0", 8080, app)
-    server.serve_forever()
+    # Create and run the server with hypercorn
+    config = Config()
+    config.bind = ["0.0.0.0:8080"]
+    asyncio.run(serve(app, config))

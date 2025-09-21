@@ -1,0 +1,7 @@
+autogen-agentchat>=0.4.8
+autogen-ext[ollama]>=0.4.8
+flask
+httpx
+werkzeug
+python-dotenv
+hypercorn
