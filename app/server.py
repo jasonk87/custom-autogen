@@ -23,8 +23,9 @@ from app.config import (
 from app.core import run_orchestrator
 from app.ollama import _http, get_ollama_endpoints, set_ollama_host
 from app.scenario import generate_agents_from_scenario
-from app.state import state
 from app.utils import tree_listing
+
+from app.state import state
 
 app = Quart(__name__)
 
@@ -181,6 +182,52 @@ def api_upload():
 def ws_file(fn: str):
     return send_from_directory(WORKSPACE_DIR, fn)
 
+@app.delete("/api/workspace/delete")
+async def api_delete_file():
+    data = await request.get_json()
+    path = data.get("path")
+    if not path:
+        return jsonify({"error": "missing_path"}), 400
+
+    # Security: Ensure the path is within the workspace directory
+    base_path = os.path.abspath(WORKSPACE_DIR)
+    target_path = os.path.abspath(os.path.join(base_path, path))
+
+    if not target_path.startswith(base_path):
+        return jsonify({"error": "access_denied"}), 403
+
+    try:
+        if os.path.isdir(target_path):
+            # This will only remove empty directories, which is a safe default
+            os.rmdir(target_path)
+        else:
+            os.remove(target_path)
+        return jsonify({"ok": True})
+    except FileNotFoundError:
+        return jsonify({"error": "not_found"}), 404
+    except OSError as e:
+        return jsonify({"error": "os_error", "message": str(e)}), 500
+
+@app.post("/api/workspace/new_folder")
+async def api_new_folder():
+    data = await request.get_json()
+    path = data.get("path")
+    if not path:
+        return jsonify({"error": "missing_path"}), 400
+
+    # Security: Ensure the path is within the workspace directory
+    base_path = os.path.abspath(WORKSPACE_DIR)
+    target_path = os.path.abspath(os.path.join(base_path, path))
+
+    if not target_path.startswith(base_path):
+        return jsonify({"error": "access_denied"}), 403
+
+    try:
+        os.makedirs(target_path, exist_ok=True)
+        return jsonify({"ok": True})
+    except OSError as e:
+        return jsonify({"error": "os_error", "message": str(e)}), 500
+
 @app.get("/api/sessions")
 def sessions_list():
     return jsonify(sorted([f for f in os.listdir(SESSIONS_DIR) if f.endswith(".json")]))
@@ -295,6 +342,16 @@ HTML = r"""
     .pill{display:inline-block;background:#0b213f;border:1px solid #23406e;color:#cfe4ff;border-radius:999px;padding:4px 8px;font-size:12px}
     .row2{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end}
     .tree ul{list-style:none;padding-left:14px} .tree li{margin:4px 0}
+    .ws-actions{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+    .ws-upload{display:flex;gap:8px;align-items:center}
+    .ws-buttons{display:flex;gap:8px}
+    .tree .node{display:flex;align-items:center;gap:6px;padding:4px;border-radius:6px;cursor:pointer}
+    .tree .node:hover{background-color:var(--chip)}
+    .tree .node-icon{width:20px;text-align:center}
+    .tree .node-name{flex:1}
+    .tree .node-actions button{visibility:hidden;background:transparent;color:var(--muted);padding:2px 4px}
+    .tree .node:hover .node-actions button{visibility:visible}
+    .tree .node .node-actions button:hover{color:var(--text)}
     #thinkdock{position:absolute;right:16px;bottom:72px;max-width:420px;width:min(42vw,420px);background:#0b213f;border:1px solid #23406e;border-radius:12px;box-shadow:0 10px 25px rgba(0,0,0,.35);display:none}
     #thinkhdr{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-bottom:1px solid #1f3a63}
     #thinkhdr .title{font-weight:700;color:#cfe4ff}
@@ -371,13 +428,17 @@ HTML = r"""
         </div>
       </section>
       <section id="work" class="hidden">
-        <div class="group" style="display:flex;gap:8px;align-items:center">
-          <input id="file" type="file" />
-          <button id="upload" class="btn btn-neutral">Upload</button>
-          <button id="refresh" class="btn btn-neutral">Refresh</button>
+        <div class="ws-actions">
+          <div class="ws-upload">
+            <input id="file" type="file" />
+            <button id="upload" class="btn btn-neutral">Upload File</button>
+          </div>
+          <div class="ws-buttons">
+            <button id="new-folder" class="btn btn-neutral">New Folder</button>
+            <button id="refresh" class="btn btn-neutral">Refresh</button>
+          </div>
         </div>
         <div class="tree" id="tree"></div>
-        <div id="files" style="font-size:13px;margin-top:8px"></div>
       </section>
       <section id="settings" class="hidden">
         <div class="group">
@@ -640,10 +701,71 @@ function renderTeam() {
   };
   $('#fbform').onsubmit=async(e)=>{ e.preventDefault(); const v=$('#fb').value.trim(); if(!v) return; addMsg('You', v, true); await fetch('/user_input',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({message:v})}); $('#fb').value=''; setStatus('running'); };
   async function refreshFiles(){ const r=await fetch('/api/workspace/files'); const d=await r.json(); const F=$('#files'); F.innerHTML = d.length? d.map(x=>`<a style='display:block;padding:6px;border:1px solid #2b3443;border-radius:8px;margin:4px 0;background:#111827' target='_blank' href='${x.path}'>${x.name}</a>`).join('') : '<div style="color:#9ca3af">No files yet.</div>'; }
-  function renderTreeNode(node){ if(node.type==='file'){ return `<li><a target=\"_blank\" href=\"/workspace/${node.path}\">${node.name}</a></li>`; } let kids=''; if(Array.isArray(node.children)){ kids = '<ul>'+node.children.map(renderTreeNode).join('')+'</ul>'; } return `<li>${node.name}${kids}</li>`; }
-  async function refreshTree(){ const r=await fetch('/api/workspace/tree'); const d=await r.json(); $('#tree').innerHTML = '<ul>'+renderTreeNode(d)+'</ul>'; }
-  $('#upload').onclick=async()=>{ const f=$('#file').files[0]; if(!f) return; const fd=new FormData(); fd.append('file', f); const r = await fetch('/api/workspace/upload',{method:'POST',body:fd}); if(!r.ok){ const e=await r.json(); toast('Upload failed: '+(e.error||e.message)); } else { toast('Uploaded'); refreshFiles(); refreshTree(); }};
-  $('#refresh').onclick=()=>{ refreshFiles(); refreshTree(); };
+  function renderTreeNode(node) {
+    const icon = node.type === 'file' ? '📄' : '📁';
+    const actions = `<div class="node-actions"><button class="delete-node" data-path="${node.path}" title="Delete">✕</button></div>`;
+    const nameEl = node.type === 'file'
+      ? `<a href="/workspace/${node.path}" target="_blank" class="node-name">${node.name}</a>`
+      : `<span class="node-name">${node.name}</span>`;
+
+    const content = `
+      <div class="node" data-path="${node.path}">
+        <span class="node-icon">${icon}</span>
+        ${nameEl}
+        ${actions}
+      </div>
+    `;
+    let children = '';
+    if (node.children && node.children.length > 0) {
+      children = `<ul>${node.children.map(renderTreeNode).join('')}</ul>`;
+    }
+    return `<li>${content}${children}</li>`;
+  }
+  async function refreshTree(){ const r=await fetch('/api/workspace/tree'); const d=await r.json(); $('#tree').innerHTML = '<ul>'+renderTreeNode(d)+'</ul>'; $('#tree').addEventListener('click', onTreeClick); }
+  $('#upload').onclick=async()=>{ const f=$('#file').files[0]; if(!f) return; const fd=new FormData(); fd.append('file', f); const r = await fetch('/api/workspace/upload',{method:'POST',body:fd}); if(!r.ok){ const e=await r.json(); toast('Upload failed: '+(e.error||e.message)); } else { toast('Uploaded'); refreshTree(); }};
+  $('#refresh').onclick=()=>{ refreshTree(); };
+  $('#new-folder').onclick = async () => {
+    const path = prompt('Enter the new folder name (e.g., my_new_folder or nested/folder):');
+    if (path) {
+      try {
+        const r = await fetch('/api/workspace/new_folder', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({path})
+        });
+        if (!r.ok) {
+          const err = await r.json().catch(()=>({error:'Request failed'}));
+          throw new Error(err.message || err.error);
+        }
+        toast(`Created folder ${path}`);
+        refreshTree();
+      } catch (err) {
+        toast(`Error creating folder: ${err.message}`);
+      }
+    }
+  };
+  async function onTreeClick(e) {
+    if (e.target.classList.contains('delete-node')) {
+      const path = e.target.dataset.path;
+      if (confirm(`Are you sure you want to delete '${path}'?`)) {
+        try {
+          const r = await fetch('/api/workspace/delete', {
+            method: 'DELETE',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({path})
+          });
+          if (!r.ok) {
+            const err = await r.json().catch(()=>({error:'Request failed'}));
+            throw new Error(err.message || err.error);
+          }
+          toast(`Deleted ${path}`);
+          refreshTree();
+        } catch (err) {
+          toast(`Error deleting ${path}: ${err.message}`);
+        }
+      }
+    }
+  }
   // Sessions quick save/load
   const sessionsModal = $('#sessions-modal');
   const sessionsList = $('#sessions-list');
