@@ -232,6 +232,50 @@ async def api_new_folder():
     except OSError as e:
         return jsonify({"error": "os_error", "message": str(e)}), 500
 
+@app.post("/api/workspace/file")
+async def api_save_file():
+    data = await request.get_json()
+    path = data.get("path")
+    content = data.get("content")
+    if path is None or content is None:
+        return jsonify({"error": "missing_path_or_content"}), 400
+
+    # Security: Ensure the path is within the workspace directory
+    base_path = os.path.abspath(WORKSPACE_DIR)
+    target_path = os.path.abspath(os.path.join(base_path, path))
+
+    if not target_path.startswith(base_path):
+        return jsonify({"error": "access_denied"}), 403
+
+    try:
+        with open(target_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": "write_error", "message": str(e)}), 500
+
+@app.get("/api/workspace/file")
+async def api_get_file():
+    path = request.args.get("path")
+    if not path:
+        return jsonify({"error": "missing_path"}), 400
+
+    # Security: Ensure the path is within the workspace directory
+    base_path = os.path.abspath(WORKSPACE_DIR)
+    target_path = os.path.abspath(os.path.join(base_path, path))
+
+    if not target_path.startswith(base_path):
+        return jsonify({"error": "access_denied"}), 403
+
+    try:
+        with open(target_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        return Response(content, mimetype="text/plain")
+    except FileNotFoundError:
+        return jsonify({"error": "not_found"}), 404
+    except Exception as e:
+        return jsonify({"error": "read_error", "message": str(e)}), 500
+
 @app.post("/api/workspace/rename")
 async def api_rename_file():
     data = await request.get_json()
