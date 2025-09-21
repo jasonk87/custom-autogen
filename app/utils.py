@@ -34,7 +34,10 @@ def tree_listing(root: str) -> Dict[str, Any]:
     """
     root_abs = _safe_path(root)
     def walk(p: str) -> Dict[str, Any]:
-        node = {"name": os.path.basename(p) or os.path.basename(root_abs), "type": "dir", "children": []}
+        rel_path = os.path.relpath(p, WORKSPACE_DIR)
+        if rel_path == ".":
+            rel_path = ""
+        node = {"name": os.path.basename(p) or os.path.basename(root_abs), "type": "dir", "path": rel_path, "children": []}
         try:
             for nm in sorted(os.listdir(p)):
                 fp = os.path.join(p, nm)

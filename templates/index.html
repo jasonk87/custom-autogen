@@ -37,6 +37,17 @@
     .pill{display:inline-block;background:#0b213f;border:1px solid #23406e;color:#cfe4ff;border-radius:999px;padding:4px 8px;font-size:12px}
     .row2{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end}
     .tree ul{list-style:none;padding-left:14px} .tree li{margin:4px 0}
+    .ws-actions{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+    .ws-upload{display:flex;gap:8px;align-items:center}
+    .ws-buttons{display:flex;gap:8px}
+    .tree .node{display:flex;align-items:center;gap:6px;padding:4px;border-radius:6px;cursor:pointer}
+    .tree .node:hover{background-color:var(--chip)}
+    .tree .node-icon{width:20px;text-align:center}
+    .tree .node-name{flex:1}
+    .tree .node-actions button{visibility:hidden;background:transparent;color:var(--muted);padding:2px 4px}
+    .tree .node:hover .node-actions button{visibility:visible}
+    .tree .node .node-actions button:hover{color:var(--text)}
+    .tree .node-name-input{flex:1;background:#374151;color:var(--text);border:1px solid var(--blue);border-radius:4px;padding:0 2px}
 
     /* Thinking UI */
     #thinkdock{position:absolute;right:16px;bottom:72px;max-width:420px;width:min(42vw,420px);background:#0b213f;border:1px solid #23406e;border-radius:12px;box-shadow:0 10px 25px rgba(0,0,0,.35);display:none}
@@ -74,6 +85,11 @@
             <input id="turns" type="number" min="1" max="200" value="60" />
           </div>
         </div>
+        <div class="card">
+          <div style="font-weight:700;margin-bottom:6px">Scenario Mode</div>
+          <textarea id="scenario" placeholder="Describe a scenario, e.g. 'two presidents debating climate change' or 'a team of developers building a web app'"></textarea>
+          <button id="generate-agents" class="btn btn-primary" style="margin-top:6px">Create Agents from Scenario</button>
+        </div>
         <div class="group">
           <label>Team Goal</label>
           <textarea id="goal" placeholder="e.g. Build a Flask app and write files to workspace"></textarea>
@@ -104,13 +120,17 @@
       </section>
 
       <section id="work" class="hidden">
-        <div class="group" style="display:flex;gap:8px;align-items:center">
-          <input id="file" type="file" />
-          <button id="upload" class="btn btn-neutral">Upload</button>
-          <button id="refresh" class="btn btn-neutral">Refresh</button>
+        <div class="ws-actions">
+          <div class="ws-upload">
+            <input id="file" type="file" />
+            <button id="upload" class="btn btn-neutral">Upload File</button>
+          </div>
+          <div class="ws-buttons">
+            <button id="new-folder" class="btn btn-neutral">New Folder</button>
+            <button id="refresh" class="btn btn-neutral">Refresh</button>
+          </div>
         </div>
         <div class="tree" id="tree"></div>
-        <div id="files" style="font-size:13px;margin-top:8px"></div>
       </section>
 
       <section id="settings" class="hidden">
@@ -166,7 +186,7 @@
   </div>
 
     <!-- Sessions Modal -->
-    <div id="sessions-modal" style="display:none; position:fixed; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1000; align-items:center; justify-content:center; display:flex;">
+    <div id="sessions-modal" style="display:none; position:fixed; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1000; align-items:center; justify-content:center;">
       <div style="background:var(--panel); padding:20px; border-radius:12px; width:min(90%, 500px); border:1px solid var(--border);">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
           <h2 style="margin:0; font-size:18px;">Manage Sessions</h2>
