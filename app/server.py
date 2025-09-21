@@ -179,6 +179,14 @@ def sessions_save():
         json.dump(data, f, indent=2)
     return jsonify({"ok": True, "file": fp}), 201
 
+@app.delete("/api/sessions/<path:name>")
+def sessions_delete(name: str):
+    fp = os.path.join(SESSIONS_DIR, name)
+    if not os.path.exists(fp):
+        return jsonify({"error": "not_found"}), 404
+    os.remove(fp)
+    return jsonify({"ok": True})
+
 @app.post("/api/transcript/md")
 def export_md():
     payload = request.json or {}
@@ -268,6 +276,12 @@ HTML = r"""
     #thinkbody{max-height:40vh;overflow:auto;padding:10px;white-space:pre-wrap;color:#e0edff}
     #thinkhdr .chip{font-size:12px;background:#092245;color:#93c5fd;border:1px solid #1e40af;padding:2px 6px;border-radius:999px}
     #thinkhdr button{background:#0e1a2b;border:1px solid #2a4066;color:#cfe4ff;border-radius:8px;padding:4px 6px;cursor:pointer}
+    #sessions-modal{position:fixed;left:0;top:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1000;display:none;align-items:center;justify-content:center}
+    #sessions-modal.active{display:flex}
+    .modal-content{background:var(--panel);padding:20px;border-radius:12px;width:min(90%,500px);border:1px solid var(--border)}
+    .modal-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:15px}
+    .modal-header h2{margin:0;font-size:18px}
+    #sessions-list{margin-bottom:15px;max-height:200px;overflow-y:auto}
   </style>
 </head>
 <body>
@@ -370,6 +384,25 @@ HTML = r"""
       </form>
     </main>
   </div>
+
+    <!-- Sessions Modal -->
+    <div id="sessions-modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>Manage Sessions</h2>
+          <button id="sessions-close" class="btn btn-neutral">✕</button>
+        </div>
+        <div id="sessions-list"></div>
+        <div class="group">
+          <label>Save Current Session As</label>
+          <div class="row2">
+            <input id="session-name" placeholder="New session name..." />
+            <button id="session-save" class="btn btn-primary">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
 <script>
   const $=(s)=>document.querySelector(s); const $$=(s)=>Array.from(document.querySelectorAll(s));
   let agents=[]; let streams={}; let es=null; let manualNames=[]; let lastModels=[];
@@ -530,7 +563,75 @@ function renderTeam() {
   async function refreshTree(){ const r=await fetch('/api/workspace/tree'); const d=await r.json(); $('#tree').innerHTML = '<ul>'+renderTreeNode(d)+'</ul>'; }
   $('#upload').onclick=async()=>{ const f=$('#file').files[0]; if(!f) return; const fd=new FormData(); fd.append('file', f); const r = await fetch('/api/workspace/upload',{method:'POST',body:fd}); if(!r.ok){ const e=await r.json(); toast('Upload failed: '+(e.error||e.message)); } else { toast('Uploaded'); refreshFiles(); refreshTree(); }};
   $('#refresh').onclick=()=>{ refreshFiles(); refreshTree(); };
-  $('#sessions').onclick=async()=>{ const name=prompt('Session name to save/load (leave blank to load list)'); if(name){ saveSession(); await fetch('/api/sessions',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, model:$('#model').value, goal:$('#goal').value, agents})}); toast('Saved.'); } else { const r=await fetch('/api/sessions'); const list=await r.json(); const pick=prompt('Available:\\n'+list.join('\\n')+'\\n\\nType a name to load:'); if(pick){ const d=await (await fetch('/api/sessions/'+pick)).json(); agents=d.agents||[]; $('#goal').value=d.goal||''; await loadModels(); if(d.model){ $('#model').value=d.model; } renderTeam(); }} };
+  // Sessions quick save/load
+  const sessionsModal = $('#sessions-modal');
+  const sessionsList = $('#sessions-list');
+
+  async function renderSessions() {
+    const r = await fetch('/api/sessions');
+    const files = await r.json();
+    sessionsList.innerHTML = files.map(f => `
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:5px; border-bottom:1px solid var(--border);">
+        <span>${f}</span>
+        <div>
+          <button class="btn btn-success session-load" data-file="${f}">Load</button>
+          <button class="btn btn-danger session-delete" data-file="${f}">Delete</button>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  $('#sessions').onclick = async () => {
+    await renderSessions();
+    sessionsModal.classList.add('active');
+  };
+
+  $('#sessions-close').onclick = () => {
+    sessionsModal.classList.remove('active');
+  };
+
+  $('#session-save').onclick = async () => {
+    const name = $('#session-name').value.trim();
+    if (!name) {
+      toast('Please enter a session name.');
+      return;
+    }
+    await fetch('/api/sessions', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name, model:$('#model').value, goal:$('#goal').value, agents})
+    });
+    toast('Session saved.');
+    $('#session-name').value = '';
+    await renderSessions();
+  };
+
+  sessionsList.addEventListener('click', async (e) => {
+    const target = e.target;
+    const file = target.dataset.file;
+
+    if (target.classList.contains('session-load')) {
+      const r = await fetch(`/api/sessions/${file}`);
+      const data = await r.json();
+      agents = data.agents || [];
+      $('#goal').value = data.goal || '';
+      await loadModels();
+      if (data.model) {
+        $('#model').value = data.model;
+      }
+      renderTeam();
+      toast(`Session ${file} loaded.`);
+      sessionsModal.classList.remove('active');
+    }
+
+    if (target.classList.contains('session-delete')) {
+      if (confirm(`Are you sure you want to delete ${file}?`)) {
+        await fetch(`/api/sessions/${file}`, { method: 'DELETE' });
+        toast(`Session ${file} deleted.`);
+        await renderSessions();
+      }
+    }
+  });
   $('#export').onclick=async()=>{ const tr=(window.__transcript||[]); const r1=await fetch('/api/transcript/md',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({transcript: tr})}); const d1=await r1.json(); const r2=await fetch('/api/transcript/html',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({transcript: tr})}); const d2=await r2.json(); toast('Exports ready: MD & HTML'); if(d1.file){ window.open(d1.file,'_blank'); } if(d2.file){ window.open(d2.file,'_blank'); } };
   $('#saveBase').onclick=async()=>{ const base=$('#ollamaBase').value.trim(); if(!base) return; const r=await fetch('/api/settings/ollama',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({base})}); if(r.ok){ toast('Saved Ollama base'); loadModels(); } else { const e=await r.json(); toast('Save failed: '+(e.message||e.error)); } };
   $('#probe').onclick=async()=>{ const t0=performance.now(); try{ const r=await fetch('/api/models'); const ok=r.ok; const dt=(performance.now()-t0).toFixed(0); const d=await r.json(); if(ok && Array.isArray(d)){ $('#probeHint').textContent=`OK (${d.length} models) in ${dt}ms`; } else { $('#probeHint').textContent=`Error in ${dt}ms: `+(d.message||JSON.stringify(d)); } } catch(e){ $('#probeHint').textContent='Probe failed: '+e.message; } };
