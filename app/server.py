@@ -576,7 +576,17 @@ function renderTeam() {
   $('#tab-setup').onclick=()=>{ $('#tab-setup').classList.add('active'); $('#tab-work').classList.remove('active'); $('#tab-settings').classList.remove('active'); $('#setup').classList.remove('hidden'); $('#work').classList.add('hidden'); $('#settings').classList.add('hidden'); };
   $('#tab-work').onclick=()=>{ $('#tab-work').classList.add('active'); $('#tab-setup').classList.remove('active'); $('#tab-settings').classList.remove('active'); $('#work').classList.remove('hidden'); $('#setup').classList.add('hidden'); $('#settings').classList.add('hidden'); refreshFiles(); refreshTree(); };
   $('#tab-settings').onclick=()=>{ $('#tab-settings').classList.add('active'); $('#tab-setup').classList.remove('active'); $('#tab-work').classList.remove('active'); $('#settings').classList.remove('hidden'); $('#setup').classList.add('hidden'); $('#work').classList.add('hidden'); };
-  $('#add').onclick=()=>{const n=$('#aname').value.trim(); if(!n) return; agents.push({name:n, system:$('#asys').value.trim(), temperature:parseFloat($('#atemp').value)||0.3}); $('#aname').value=''; $('#asys').value=''; renderTeam(); saveSession();};
+  function sanitize(name) { return name.replace(/[^a-zA-Z0-9_]/g, '_'); }
+  $('#add').onclick=()=>{
+    const n = $('#aname').value.trim();
+    if (!n) return;
+    const sanitizedName = sanitize(n);
+    agents.push({name:sanitizedName, system:$('#asys').value.trim(), temperature:parseFloat($('#atemp').value)||0.3});
+    $('#aname').value='';
+    $('#asys').value='';
+    renderTeam();
+    saveSession();
+  };
   $('#fbform').onsubmit=async(e)=>{ e.preventDefault(); const v=$('#fb').value.trim(); if(!v) return; addMsg('You', v, true); await fetch('/user_input',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({message:v})}); $('#fb').value=''; setStatus('running'); };
   async function refreshFiles(){ const r=await fetch('/api/workspace/files'); const d=await r.json(); const F=$('#files'); F.innerHTML = d.length? d.map(x=>`<a style='display:block;padding:6px;border:1px solid #2b3443;border-radius:8px;margin:4px 0;background:#111827' target='_blank' href='${x.path}'>${x.name}</a>`).join('') : '<div style="color:#9ca3af">No files yet.</div>'; }
   function renderTreeNode(node){ if(node.type==='file'){ return `<li><a target=\"_blank\" href=\"/workspace/${node.path}\">${node.name}</a></li>`; } let kids=''; if(Array.isArray(node.children)){ kids = '<ul>'+node.children.map(renderTreeNode).join('')+'</ul>'; } return `<li>${node.name}${kids}</li>`; }
