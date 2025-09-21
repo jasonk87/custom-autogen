@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from typing import Any, Dict
 
 import httpx
-from flask import Flask, Response, jsonify, request, send_from_directory
+from quart import Quart, Response, jsonify, request, send_from_directory
 from werkzeug.utils import secure_filename
 
 from app import log
@@ -25,7 +25,7 @@ from app.ollama import _http, get_ollama_endpoints, set_ollama_host
 from app.state import state
 from app.utils import tree_listing
 
-app = Flask(__name__)
+app = Quart(__name__)
 
 _models_cache: Dict[str, Any] = {"ts": 0.0, "names": []}
 
@@ -37,8 +37,9 @@ async def stream():
     model = request.args.get("model", DEFAULT_MODEL)
     goal_b64 = request.args.get("goal", "")
     agents_b64 = request.args.get("agents", "")
-    manager_mode = request.args.get("manager_mode", "Directed")
+    manager_mode = request.args.get("manager_mode", "auto")
     max_turns = int(request.args.get("turns", "60"))
+    human_proxy = request.args.get("human_proxy", "false").lower() == "true"
     try:
         goal = base64.b64decode(goal_b64.encode()).decode(errors="ignore") if goal_b64 else ""
     except Exception:
@@ -51,7 +52,7 @@ async def stream():
 
     # We need to run the orchestrator in a separate thread with its own event loop
     def run_async_orchestrator():
-        asyncio.run(run_orchestrator(goal, model, agents_cfg, manager_mode, out_q, max_turns))
+        asyncio.run(run_orchestrator(goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy))
 
     state.start(run_async_orchestrator, ())
 
@@ -317,12 +318,12 @@ HTML = r"""
         </div>
         <div class="row">
           <div class="group">
-            <label>Manager Mode</label>
-            <select id="mode"><option>Directed</option><option>RoundRobin</option><option>Manual</option></select>
-          </div>
-          <div class="group">
             <label>Max Turns</label>
             <input id="turns" type="number" min="1" max="200" value="60" />
+          </div>
+          <div class="group">
+            <label>Human Proxy</label>
+            <input id="human-proxy" type="checkbox" />
           </div>
         </div>
         <div class="group">
@@ -369,6 +370,10 @@ HTML = r"""
         <div class="group">
           <button id="probe" class="btn btn-neutral">Probe Ollama</button>
           <span id="probeHint" style="margin-left:8px;color:#9ca3af"></span>
+        </div>
+        <div class="group">
+          <label>Manager Mode</label>
+          <select id="mode"><option>auto</option><option>round_robin</option><option>random</option></select>
         </div>
       </section>
     </aside>
@@ -546,7 +551,14 @@ function renderTeam() {
     $('#chat').innerHTML=''; closeThinkDock(); streams={};
     addMsg('System','Task started'); setStatus('running'); buttons(true);
     manualNames = agents.map(a=>a.name).concat(['Human_Admin']);
-    const payload = new URLSearchParams({ model: $('#model').value, goal: btoa($('#goal').value||''), agents: btoa(JSON.stringify(agents)), manager_mode: $('#mode').value, turns: ($('#turns').value||'') });
+    const payload = new URLSearchParams({
+      model: $('#model').value,
+      goal: btoa($('#goal').value||''),
+      agents: btoa(JSON.stringify(agents)),
+      manager_mode: $('#mode').value,
+      turns: ($('#turns').value||''),
+      human_proxy: $('#human-proxy').checked
+    });
     es = new EventSource('/stream?'+payload.toString());
     es.onmessage = (ev)=>{
       if(ev.data==='[DONE]'){ es.close(); setStatus('idle'); buttons(false); addMsg('System','Task complete'); return; }
