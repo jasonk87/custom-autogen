@@ -775,7 +775,12 @@ function renderTeam() {
 """
 @app.get("/")
 def index():
-    return Response(HTML, mimetype="text/html")
+    headers = {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
+    return Response(HTML, mimetype="text/html", headers=headers)
 _server: Optional[any] = None
 def _shutdown(*_args):
     try:
