@@ -228,6 +228,33 @@ async def api_new_folder():
     except OSError as e:
         return jsonify({"error": "os_error", "message": str(e)}), 500
 
+@app.post("/api/workspace/rename")
+async def api_rename_file():
+    data = await request.get_json()
+    old_path = data.get("old_path")
+    new_path = data.get("new_path")
+    if not old_path or not new_path:
+        return jsonify({"error": "missing_path"}), 400
+
+    # Security: Ensure the paths are within the workspace directory
+    base_path = os.path.abspath(WORKSPACE_DIR)
+
+    old_target_path = os.path.abspath(os.path.join(base_path, old_path))
+    # For the new path, we need to resolve the directory part and then join the new name
+    new_path_dir = os.path.dirname(os.path.join(base_path, new_path))
+    new_target_path = os.path.abspath(os.path.join(new_path_dir, os.path.basename(new_path)))
+
+    if not old_target_path.startswith(base_path) or not new_target_path.startswith(base_path):
+        return jsonify({"error": "access_denied"}), 403
+
+    try:
+        os.rename(old_target_path, new_target_path)
+        return jsonify({"ok": True})
+    except FileNotFoundError:
+        return jsonify({"error": "not_found"}), 404
+    except OSError as e:
+        return jsonify({"error": "os_error", "message": str(e)}), 500
+
 @app.get("/api/sessions")
 def sessions_list():
     return jsonify(sorted([f for f in os.listdir(SESSIONS_DIR) if f.endswith(".json")]))
@@ -352,6 +379,7 @@ HTML = r"""
     .tree .node-actions button{visibility:hidden;background:transparent;color:var(--muted);padding:2px 4px}
     .tree .node:hover .node-actions button{visibility:visible}
     .tree .node .node-actions button:hover{color:var(--text)}
+    .tree .node-name-input{flex:1;background:#374151;color:var(--text);border:1px solid var(--blue);border-radius:4px;padding:0 2px}
     #thinkdock{position:absolute;right:16px;bottom:72px;max-width:420px;width:min(42vw,420px);background:#0b213f;border:1px solid #23406e;border-radius:12px;box-shadow:0 10px 25px rgba(0,0,0,.35);display:none}
     #thinkhdr{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-bottom:1px solid #1f3a63}
     #thinkhdr .title{font-weight:700;color:#cfe4ff}
@@ -703,7 +731,7 @@ function renderTeam() {
   async function refreshFiles(){ const r=await fetch('/api/workspace/files'); const d=await r.json(); const F=$('#files'); F.innerHTML = d.length? d.map(x=>`<a style='display:block;padding:6px;border:1px solid #2b3443;border-radius:8px;margin:4px 0;background:#111827' target='_blank' href='${x.path}'>${x.name}</a>`).join('') : '<div style="color:#9ca3af">No files yet.</div>'; }
   function renderTreeNode(node) {
     const icon = node.type === 'file' ? '📄' : '📁';
-    const actions = `<div class="node-actions"><button class="delete-node" data-path="${node.path}" title="Delete">✕</button></div>`;
+    const actions = `<div class="node-actions"><button class="rename-node" data-path="${node.path}" title="Rename">✏️</button><button class="delete-node" data-path="${node.path}" title="Delete">✕</button></div>`;
     const nameEl = node.type === 'file'
       ? `<a href="/workspace/${node.path}" target="_blank" class="node-name">${node.name}</a>`
       : `<span class="node-name">${node.name}</span>`;
@@ -764,7 +792,59 @@ function renderTeam() {
           toast(`Error deleting ${path}: ${err.message}`);
         }
       }
+    } else if (e.target.classList.contains('rename-node')) {
+      e.preventDefault();
+      e.stopPropagation();
+      handleRename(e.target);
     }
+  }
+
+  function handleRename(renameButton) {
+    const nodeDiv = renameButton.closest('.node');
+    const nameEl = nodeDiv.querySelector('.node-name');
+    const oldPath = renameButton.dataset.path;
+    const oldName = nameEl.textContent;
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = oldName;
+    input.className = 'node-name-input';
+    nameEl.replaceWith(input);
+    input.focus();
+    input.select();
+
+    const finishRename = async () => {
+      const newName = input.value.trim();
+      if (newName && newName !== oldName) {
+        const oldPathParts = oldPath.split('/');
+        const newPath = [...oldPathParts.slice(0, -1), newName].join('/');
+        try {
+          const r = await fetch('/api/workspace/rename', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({old_path: oldPath, new_path: newPath})
+          });
+          if (!r.ok) {
+            const err = await r.json().catch(()=>({error:'Request failed'}));
+            throw new Error(err.message || err.error);
+          }
+          toast(`Renamed to ${newName}`);
+        } catch (err) {
+          toast(`Error renaming: ${err.message}`);
+        }
+      }
+      refreshTree();
+    };
+
+    input.onblur = finishRename;
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter') {
+        input.blur();
+      } else if (e.key === 'Escape') {
+        input.onblur = null;
+        refreshTree();
+      }
+    };
   }
   // Sessions quick save/load
   const sessionsModal = $('#sessions-modal');
