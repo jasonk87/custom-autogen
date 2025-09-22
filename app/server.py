@@ -44,10 +44,10 @@ _models_cache: Dict[str, Any] = {"ts": 0.0, "names": []}
 
 import asyncio
 
-def _run_orchestrator_thread(goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy):
+def _run_orchestrator_thread(goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy, temperature):
     """Target for the orchestrator thread."""
     try:
-        asyncio.run(run_orchestrator(goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy))
+        asyncio.run(run_orchestrator(goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy, temperature))
     except Exception as e:
         log.error("orchestrator_thread_error", error=str(e))
         # Ensure [DONE] is sent even if an error occurs
@@ -61,6 +61,7 @@ async def stream():
     manager_mode = request.args.get("manager_mode", "auto")
     max_turns = int(request.args.get("turns", "60"))
     human_proxy = request.args.get("human_proxy", "false").lower() == "true"
+    temperature = float(request.args.get("temperature", "0.3"))
     try:
         goal = base64.b64decode(goal_b64.encode()).decode(errors="ignore") if goal_b64 else ""
     except Exception:
@@ -72,7 +73,7 @@ async def stream():
     out_q: "queue.Queue[str]" = queue.Queue()
 
     # We need to run the orchestrator in a separate thread with its own event loop
-    thread_args = (goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy)
+    thread_args = (goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy, temperature)
     state.start(_run_orchestrator_thread, thread_args)
 
     def gen():

@@ -63,12 +63,13 @@ class MyUserProxyAgent(UserProxyAgent):
                     return "exit"
                 continue
 
-async def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any]], manager_mode: str, out_q: "queue.Queue[str]", max_turns: int = 60, human_proxy: bool = False):
+async def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any]], manager_mode: str, out_q: "queue.Queue[str]", max_turns: int = 60, human_proxy: bool = False, temperature: float = 0.3):
     try:
         # 1. Create model client
         ollama_client = OllamaChatCompletionClient(
             model=model or DEFAULT_MODEL,
             host=OLLAMA_BASE_URL,
+            temperature=temperature,
         )
 
         # 2. Create agents
