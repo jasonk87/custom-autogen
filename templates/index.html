@@ -59,6 +59,9 @@
     #graph-container{width:100%;height:100%;}
   </style>
   <script src="https://unpkg.com/@antv/g6/dist/g6.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/xterm/5.3.0/xterm.min.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xterm/5.3.0/xterm.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xterm-addon-fit/0.8.0/xterm-addon-fit.min.js"></script>
 </head>
 <body>
   <div class="app">
@@ -73,6 +76,7 @@
       <div class="tabs">
         <button id="tab-setup" class="tab active">Setup</button>
         <button id="tab-work" class="tab">Workspace</button>
+        <button id="tab-terminal" class="tab">Terminal</button>
         <button id="tab-graph" class="tab">Graph</button>
         <button id="tab-playground" class="tab">Playground</button>
         <button id="tab-settings" class="tab">Settings</button>
@@ -88,6 +92,12 @@
             <label>Max Turns</label>
             <input id="turns" type="number" min="1" max="200" value="60" />
           </div>
+        </div>
+        <div class="row">
+            <div class="group">
+                <label>Team Temperature</label>
+                <input id="temperature" type="number" min="0" max="2" step="0.1" value="0.3" />
+            </div>
         </div>
         <div class="card">
           <div style="font-weight:700;margin-bottom:6px">Scenario Mode</div>
@@ -137,6 +147,10 @@
         <div class="tree" id="tree"></div>
       </section>
 
+      <section id="terminal" class="hidden" style="padding:0; background:#000; display: flex; flex: 1;">
+        <div id="terminal-container" style="width:100%; height:100%"></div>
+      </section>
+
       <section id="graph" class="hidden">
         <div id="graph-container" style="width: 100%; height: 500px; background: #111827; border: 1px solid #334155; border-radius: 8px;"></div>
       </section>
@@ -173,10 +187,6 @@
         <div class="group">
             <label>Default Temperature</label>
             <input id="default-temp" type="number" min="0" max="2" step="0.1" value="0.3" />
-        </div>
-        <div class="group">
-            <label>Team Temperature</label>
-            <input id="temperature" type="number" min="0" max="2" step="0.1" value="0.3" />
         </div>
         <div class="group">
           <label>Ollama Base URL</label>

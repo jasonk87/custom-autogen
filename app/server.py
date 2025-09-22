@@ -6,10 +6,15 @@ import os
 import queue
 import subprocess
 import time
+import pty
+import asyncio
+import fcntl
+import struct
+import termios
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-from quart import Quart, Response, jsonify, request, send_from_directory, render_template
+from quart import Quart, Response, jsonify, request, send_from_directory, render_template, websocket
 from werkzeug.utils import secure_filename
 
 from app import log
@@ -444,6 +449,72 @@ def export_html():
     with open(fp, "w", encoding="utf-8") as f:
         f.write(html)
     return jsonify({"ok": True, "file": f"/workspace/{fn}"})
+
+@app.websocket("/api/workspace/terminal")
+async def ws_terminal():
+    """Handle the lifecycle of a pseudo-terminal for the workspace."""
+    await websocket.accept()
+
+    # Create a child process attached to a pseudo-terminal
+    pid, master_fd = pty.fork()
+    if pid == 0:  # Child process
+        # Start a shell
+        os.execv("/bin/bash", ["/bin/bash"])
+
+    # --- Parent Process ---
+    # Set the initial window size
+    try:
+        # Set the window size of the pty
+        fcntl.ioctl(master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+    except Exception as e:
+        log.error("failed_to_set_winsize", error=str(e))
+
+    async def forward_pty_output():
+        """Read from pty and forward to websocket."""
+        try:
+            while True:
+                # This is a blocking read, so run it in an executor
+                data = await asyncio.to_thread(os.read, master_fd, 1024)
+                if not data:
+                    break
+                await websocket.send(data.decode(errors="ignore"))
+        except (asyncio.CancelledError, OSError):
+            pass
+
+    async def forward_websocket_input():
+        """Read from websocket and forward to pty."""
+        try:
+            while True:
+                data = await websocket.receive()
+                # Handle resize messages from the frontend
+                if data.startswith("resize:"):
+                    try:
+                        _, rows, cols = data.split(":")
+                        winsize = struct.pack("HHHH", int(rows), int(cols), 0, 0)
+                        fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
+                    except Exception as e:
+                        log.error("failed_to_resize_pty", error=str(e))
+                else:
+                    os.write(master_fd, data.encode())
+        except asyncio.CancelledError:
+            pass
+
+    # Create and run the two forwarding tasks
+    pty_task = asyncio.create_task(forward_pty_output())
+    ws_task = asyncio.create_task(forward_websocket_input())
+
+    try:
+        await asyncio.gather(pty_task, ws_task)
+    except Exception as e:
+        log.error("terminal_session_error", error=str(e))
+    finally:
+        # Ensure the child process is killed when the connection is closed
+        try:
+            os.kill(pid, 9)
+            os.waitpid(pid, 0)
+        except OSError:
+            pass # Process may have already exited
+        log.info("terminal_session_closed", extra={"pid": pid})
 
 @app.get("/")
 async def index():

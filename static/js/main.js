@@ -1,5 +1,5 @@
 const $=(s)=>document.querySelector(s); const $$=(s)=>Array.from(document.querySelectorAll(s));
-let agents=[]; let streams={}; let es=null; let manualNames=[]; let lastModels=[];
+let agents=[]; let streams={}; let es=null; let manualNames=[]; let lastModels=[]; let term=null; let ws=null;
 const think = { active:false, buffer:'', open:false, minimized:false };
 let graph = null;
 
@@ -38,6 +38,52 @@ async function loadModels(){ $('#model').innerHTML='<option>Loading…</option>'
 const origAddMsg=addMsg; addMsg=function(sender,text,mine=false,id=null){ window.__transcript=(window.__transcript||[]).concat([{t:Date.now(),from:sender,text}]); return origAddMsg(sender,text,mine,id)};
 function saveSession(){ try{ const session={goal:$('#goal').value,agents:agents}; localStorage.setItem('agentStudioSession',JSON.stringify(session))}catch(e){console.error("Failed to save session",e)}}
 function loadSession(){ const saved=localStorage.getItem('agentStudioSession'); if(!saved)return; try{ const session=JSON.parse(saved); if(session.goal)$('#goal').value=session.goal; if(session.agents)agents=session.agents}catch(e){console.error("Failed to load session",e); localStorage.removeItem('agentStudioSession')}}
+function initTerminal(){
+  if(term) return; // Already initialized
+  const terminalContainer = document.getElementById('terminal-container');
+  term = new Terminal({
+    cursorBlink: true,
+    theme: {
+      background: '#0b1220',
+      foreground: '#e5e7eb',
+      cursor: '#e5e7eb',
+    }
+  });
+  const fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(terminalContainer);
+  fitAddon.fit();
+
+  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${wsProtocol}//${window.location.host}/api/workspace/terminal`;
+  ws = new WebSocket(wsUrl);
+
+  ws.onopen = () => {
+    // Send initial size
+    const initialSize = `resize:${term.rows}:${term.cols}`;
+    ws.send(initialSize);
+  };
+
+  ws.onmessage = (event) => {
+    term.write(event.data);
+  };
+
+  ws.onclose = () => {
+    term.write('\\r\\n\\n[Connection Closed]');
+  };
+
+  term.onData((data) => {
+    ws.send(data);
+  });
+
+  window.addEventListener('resize', () => {
+    fitAddon.fit();
+    const size = `resize:${term.rows}:${term.cols}`;
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(size);
+    }
+  });
+}
 function initGraph(){ const container=$('#graph-container'); const width=container.scrollWidth; const height=container.scrollHeight||500; graph=new G6.Graph({container,width,height,fitView:true,layout:{type:'force',preventOverlap:true,nodeSize:30},defaultNode:{size:30,style:{fill:'#2563eb',stroke:'#1d4ed8',lineWidth:2,},labelCfg:{style:{fill:'#e5e7eb'}}},defaultEdge:{style:{stroke:'#9ca3af',lineWidth:1.5,endArrow:{path:G6.Arrow.triangle(),d:5,}}}}); graph.data({nodes:[],edges:[]}); graph.render()}
 function updateGraph(edge){ const fromNode=graph.findById(edge.from); if(!fromNode){graph.addItem('node',{id:edge.from,label:edge.from})} const toNode=graph.findById(edge.to); if(!toNode){graph.addItem('node',{id:edge.to,label:edge.to})} graph.addItem('edge',{source:edge.from,target:edge.to}); }
 async function loadTools(){ try{ const r=await fetch('/api/tools'); const tools=await r.json(); const container=$('#playground-tools'); container.innerHTML=tools.map(t=>`
@@ -45,7 +91,7 @@ async function loadTools(){ try{ const r=await fetch('/api/tools'); const tools=
         <input type="checkbox" class="playground-tool-checkbox" value="${t.name}" />
         <span>${t.name}</span>
       </label>`).join('')}catch(e){console.error("Failed to load tools",e)}}
-function setupTabs(){ const tabs=$$('.tab'); const sections=$$('section'); tabs.forEach(tab=>{ tab.onclick=()=>{ tabs.forEach(t=>t.classList.remove('active')); sections.forEach(s=>s.classList.add('hidden')); tab.classList.add('active'); const target=tab.id.replace('tab-',''); $(`#${target}`).classList.remove('hidden'); if(target==='work')refreshTree(); if(target==='graph'&&graph)graph.fitView(); if(target==='playground')loadTools()}})}
+function setupTabs(){ const tabs=$$('.tab'); const sections=$$('section'); tabs.forEach(tab=>{ tab.onclick=()=>{ tabs.forEach(t=>t.classList.remove('active')); sections.forEach(s=>s.classList.add('hidden')); tab.classList.add('active'); const target=tab.id.replace('tab-',''); $(`#${target}`).classList.remove('hidden'); if(target==='work')refreshTree(); if(target==='terminal')initTerminal(); if(target==='graph'&&graph)graph.fitView(); if(target==='playground')loadTools()}})}
 document.addEventListener('DOMContentLoaded',()=>{ initGraph(); setupTabs(); $('#thinkmin').onclick=()=>{if(think.minimized)expandThinkDock();else collapseThinkDock()}; $('#thinkclose').onclick=()=>{closeThinkDock()}; $('#add').onclick=()=>{ const n=$('#aname').value.trim(); if(!n)return; const sanitizedName=n.replace(/[^a-zA-Z0-9_]/g,'_'); agents.push({name:sanitizedName,system:$('#asys').value.trim(),temperature:parseFloat($('#atemp').value)||0.3}); $('#aname').value=''; $('#asys').value=''; renderTeam(); saveSession()}; $('#generate-agents').onclick=async()=>{ const scenario=$('#scenario').value.trim(); if(!scenario){toast('Please enter a scenario description.');return} const btn=$('#generate-agents'); btn.disabled=true; btn.textContent='Generating...'; try{ const r=await fetch('/api/scenario/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenario,model:$('#model').value})}); if(!r.ok){ const err=await r.json().catch(()=>({error:'Request failed'})); throw new Error(err.error)} const newAgents=await r.json(); agents=newAgents; renderTeam(); toast('Agents generated successfully.')}catch(e){toast('Failed to generate agents: '+e.message)}finally{ btn.disabled=false; btn.textContent='Create Agents from Scenario'}}; $('#fbform').onsubmit=async e=>{ e.preventDefault(); const v=$('#fb').value.trim(); if(!v)return; addMsg('You',v,true); await fetch('/user_input',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:v})}); $('#fb').value=''; setStatus('running')}; $('#upload').onclick=async()=>{ const f=$('#file').files[0]; if(!f)return; const fd=new FormData(); fd.append('file',f); const r=await fetch('/api/workspace/upload',{method:'POST',body:fd}); if(!r.ok){ const e=await r.json(); toast('Upload failed: '+(e.error||e.message))}else{ toast('Uploaded'); refreshTree()}}; $('#refresh').onclick=()=>{refreshTree()}; $('#new-folder').onclick=async()=>{ const path=prompt('Enter the new folder name (e.g., my_new_folder or nested/folder):'); if(path){ try{ const r=await fetch('/api/workspace/new_folder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})}); if(!r.ok){ const err=await r.json().catch(()=>({error:'Request failed'})); throw new Error(err.message||err.error)} toast(`Created folder ${path}`); refreshTree()}catch(err){toast(`Error creating folder: ${err.message}`)}}}; const sessionsModal=$('#sessions-modal'); const sessionsList=$('#sessions-list'); async function renderSessions(){ const r=await fetch('/api/sessions'); const files=await r.json(); sessionsList.innerHTML=files.map(f=>`
       <div style="display:flex; justify-content:space-between; align-items:center; padding:5px; border-bottom:1px solid var(--border);">
         <span>${f}</span>

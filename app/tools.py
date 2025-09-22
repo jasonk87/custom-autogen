@@ -30,6 +30,8 @@ def tool_write_file(path: str, content: str, overwrite: bool = True) -> str:
     return f"wrote {len(content)} bytes to {path}"
 
 
+import subprocess
+
 def tool_delete(path: str) -> str:
     fp = _safe_path(path)
     if os.path.isdir(fp):
@@ -39,9 +41,43 @@ def tool_delete(path: str) -> str:
     return f"deleted {path}"
 
 
+def execute_shell_command(command: str) -> str:
+    """
+    Executes a shell command in the workspace directory and returns the output.
+
+    Args:
+        command: The shell command to execute.
+
+    Returns:
+        A string containing the stdout and stderr of the command.
+
+    Warning:
+        This tool allows the execution of arbitrary shell commands.
+        Ensure that the agent's instructions are safe and that the
+        environment is properly sandboxed if security is a concern.
+    """
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=WORKSPACE_DIR
+        )
+        output = f"Stdout:\n{result.stdout}\n"
+        if result.stderr:
+            output += f"Stderr:\n{result.stderr}\n"
+        return output
+    except subprocess.CalledProcessError as e:
+        return f"Error executing command: {e}\nStdout:\n{e.stdout}\nStderr:\n{e.stderr}"
+
+
 TOOLS: Dict[str, Any] = {
     "listdir": tool_listdir,
     "read_file": tool_read_file,
     "write_file": tool_write_file,
     "delete": tool_delete,
+    "execute_shell_command": execute_shell_command,
 }
