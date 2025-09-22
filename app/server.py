@@ -1,11 +1,12 @@
 import base64
+import base64
 import io
 import json
 import os
 import queue
+import subprocess
 import time
 from typing import Any, Dict, List, Optional, Tuple
-from typing import Any, Dict
 
 import httpx
 from quart import Quart, Response, jsonify, request, send_from_directory, render_template
@@ -38,6 +39,15 @@ _models_cache: Dict[str, Any] = {"ts": 0.0, "names": []}
 
 import asyncio
 
+def _run_orchestrator_thread(goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy):
+    """Target for the orchestrator thread."""
+    try:
+        asyncio.run(run_orchestrator(goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy))
+    except Exception as e:
+        log.error("orchestrator_thread_error", error=str(e))
+        # Ensure [DONE] is sent even if an error occurs
+        out_q.put("[DONE]")
+
 @app.get("/stream")
 async def stream():
     model = request.args.get("model", DEFAULT_MODEL)
@@ -57,10 +67,8 @@ async def stream():
     out_q: "queue.Queue[str]" = queue.Queue()
 
     # We need to run the orchestrator in a separate thread with its own event loop
-    def run_async_orchestrator():
-        asyncio.run(run_orchestrator(goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy))
-
-    state.start(run_async_orchestrator, ())
+    thread_args = (goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy)
+    state.start(_run_orchestrator_thread, thread_args)
 
     def gen():
         last_ping = time.time()

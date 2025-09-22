@@ -5,7 +5,7 @@ import random
 from typing import Any, Dict, List, Optional, Sequence
 
 from autogen_agentchat.agents import AssistantAgent, UserProxyAgent
-from autogen_agentchat.messages import ModelClientStreamingChunkEvent, TextMessage, BaseChatMessage, BaseAgentEvent
+from autogen_agentchat.messages import ModelClientStreamingChunkEvent, TextMessage, BaseChatMessage, BaseAgentEvent, SelectSpeakerEvent
 from autogen_agentchat.teams import SelectorGroupChat
 from autogen_ext.models.ollama import OllamaChatCompletionClient
 
@@ -13,12 +13,40 @@ from app.config import OLLAMA_BASE_URL, DEFAULT_MODEL
 from app.state import state
 from app.tools import TOOLS
 
-async def stream_to_queue(stream, out_q):
+async def stream_to_queue(stream, out_q, groupchat):
     async for message in stream:
+        payload = None
         if isinstance(message, ModelClientStreamingChunkEvent):
-            out_q.put(json.dumps({"type": "token", "id": "stream", "delta": message.delta}))
-        else:
-            out_q.put(json.dumps({"type": "chat", "sender": "System", "message": str(message)}))
+            payload = {"type": "token", "id": "stream", "delta": message.delta, "sender": message.source}
+        elif isinstance(message, SelectSpeakerEvent):
+            payload = {
+                "type": "chat",
+                "sender": message.source,
+                "message": f"Selected speaker: {message.content[0]}",
+                "graph_edge": {
+                    "from": message.source,
+                    "to": message.content[0]
+                }
+            }
+        elif isinstance(message, BaseChatMessage):
+            payload = {
+                "type": "chat",
+                "sender": message.source,
+                "message": message.to_text(),
+                "graph_edge": {
+                    "from": message.source,
+                    "to": groupchat.name
+                }
+            }
+        elif isinstance(message, BaseAgentEvent):
+            payload = {
+                "type": "chat",
+                "sender": message.source,
+                "message": message.to_text(),
+            }
+
+        if payload:
+            out_q.put(json.dumps(payload))
 
 class MyUserProxyAgent(UserProxyAgent):
     def get_human_input(self, prompt: str) -> str:
@@ -92,7 +120,7 @@ async def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any
                 task=messages,
             )
 
-            stream_task = asyncio.create_task(stream_to_queue(chat_stream, out_q))
+            stream_task = asyncio.create_task(stream_to_queue(chat_stream, out_q, groupchat))
 
             # Reset messages for the next turn
             messages = []
