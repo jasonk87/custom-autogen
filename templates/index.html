@@ -74,6 +74,7 @@
         <button id="tab-setup" class="tab active">Setup</button>
         <button id="tab-work" class="tab">Workspace</button>
         <button id="tab-graph" class="tab">Graph</button>
+        <button id="tab-playground" class="tab">Playground</button>
         <button id="tab-settings" class="tab">Settings</button>
       </div>
 
@@ -138,6 +139,26 @@
 
       <section id="graph" class="hidden">
         <div id="graph-container" style="width: 100%; height: 500px; background: #111827; border: 1px solid #334155; border-radius: 8px;"></div>
+      </section>
+
+      <section id="playground" class="hidden">
+        <div class="group">
+          <label>Agent Name</label>
+          <input id="playground-agent-name" value="MyAgent" />
+        </div>
+        <div class="group">
+          <label>System Message</label>
+          <textarea id="playground-system-message" placeholder="e.g., You are a helpful assistant.">You are a helpful assistant.</textarea>
+        </div>
+        <div class="group">
+          <label>Tools</label>
+          <div id="playground-tools" style="display: flex; flex-wrap: wrap; gap: 6px;"></div>
+        </div>
+        <div id="playground-chat-area" style="flex: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-top: 10px; min-height: 200px;"></div>
+        <form id="playground-form" style="display: flex; gap: 8px; margin-top: 10px;">
+          <input id="playground-input" placeholder="Talk to your agent..." />
+          <button id="playground-send" class="btn btn-primary">Send</button>
+        </form>
       </section>
 
       <section id="settings" class="hidden">

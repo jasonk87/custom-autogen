@@ -13,38 +13,42 @@ from app.config import OLLAMA_BASE_URL, DEFAULT_MODEL
 from app.state import state
 from app.tools import TOOLS
 
+def _create_graph_payload(message: Any, groupchat: SelectorGroupChat) -> Optional[Dict[str, Any]]:
+    """Creates a payload for the frontend, including graph data if applicable."""
+    payload = None
+    if isinstance(message, ModelClientStreamingChunkEvent):
+        payload = {"type": "token", "id": "stream", "delta": message.delta, "sender": message.source}
+    elif isinstance(message, SelectSpeakerEvent):
+        payload = {
+            "type": "chat",
+            "sender": message.source,
+            "message": f"Selected speaker: {message.content[0]}",
+            "graph_edge": {
+                "from": message.source,
+                "to": message.content[0]
+            }
+        }
+    elif isinstance(message, BaseChatMessage):
+        payload = {
+            "type": "chat",
+            "sender": message.source,
+            "message": message.to_text(),
+            "graph_edge": {
+                "from": message.source,
+                "to": groupchat.name
+            }
+        }
+    elif isinstance(message, BaseAgentEvent):
+        payload = {
+            "type": "chat",
+            "sender": message.source,
+            "message": message.to_text(),
+        }
+    return payload
+
 async def stream_to_queue(stream, out_q, groupchat):
     async for message in stream:
-        payload = None
-        if isinstance(message, ModelClientStreamingChunkEvent):
-            payload = {"type": "token", "id": "stream", "delta": message.delta, "sender": message.source}
-        elif isinstance(message, SelectSpeakerEvent):
-            payload = {
-                "type": "chat",
-                "sender": message.source,
-                "message": f"Selected speaker: {message.content[0]}",
-                "graph_edge": {
-                    "from": message.source,
-                    "to": message.content[0]
-                }
-            }
-        elif isinstance(message, BaseChatMessage):
-            payload = {
-                "type": "chat",
-                "sender": message.source,
-                "message": message.to_text(),
-                "graph_edge": {
-                    "from": message.source,
-                    "to": groupchat.name
-                }
-            }
-        elif isinstance(message, BaseAgentEvent):
-            payload = {
-                "type": "chat",
-                "sender": message.source,
-                "message": message.to_text(),
-            }
-
+        payload = _create_graph_payload(message, groupchat)
         if payload:
             out_q.put(json.dumps(payload))
 

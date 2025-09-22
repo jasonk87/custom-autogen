@@ -22,10 +22,15 @@ from app.config import (
     WORKSPACE_DIR,
 )
 from app.core import run_orchestrator
-from app.ollama import _http, get_ollama_endpoints, set_ollama_host
+from app.ollama import _http, get_ollama_endpoints, set_ollama_host, OLLAMA_BASE_URL
 from .scenario import generate_agents_from_scenario
 from app.state import state
+from app.tools import TOOLS
 from app.utils import tree_listing
+from autogen_agentchat.agents import AssistantAgent, UserProxyAgent
+from autogen_agentchat.messages import TextMessage
+from autogen_agentchat.teams import SelectorGroupChat
+from autogen_ext.models.ollama import OllamaChatCompletionClient
 
 # To handle templates and static files correctly when run from main.py
 app_dir = os.path.dirname(os.path.abspath(__file__))
@@ -156,6 +161,61 @@ def api_models():
         return jsonify({"error": "connect_failed", "message": str(e)}), 503
     except ValueError as e:
         return jsonify({"error": "bad_json", "message": str(e)}), 502
+
+@app.get("/api/tools")
+def api_tools():
+    """Returns a list of available tools."""
+    tool_list = []
+    for name, func in TOOLS.items():
+        tool_list.append({
+            "name": name,
+            "description": func.__doc__
+        })
+    return jsonify(tool_list)
+
+@app.post("/api/agent/run")
+async def api_agent_run():
+    data = await request.get_json()
+    agent_config = data.get("agent")
+    message = data.get("message")
+    model = data.get("model", DEFAULT_MODEL)
+
+    if not agent_config or not message:
+        return jsonify({"error": "missing_agent_or_message"}), 400
+
+    try:
+        # 1. Create model client
+        ollama_client = OllamaChatCompletionClient(model=model, host=OLLAMA_BASE_URL)
+
+        # 2. Filter the tools based on the user's selection
+        selected_tool_names = agent_config.get("tools", [])
+        selected_tools = [TOOLS[name] for name in selected_tool_names if name in TOOLS]
+
+        # 3. Create the agent
+        agent = AssistantAgent(
+            name=agent_config.get("name", "playground_agent"),
+            model_client=ollama_client,
+            system_message=agent_config.get("system_message", "You are a helpful assistant."),
+            tools=selected_tools,
+        )
+
+        # 4. Create a user proxy agent to stand in for the user
+        user_proxy = UserProxyAgent(name="user_proxy")
+
+        # 5. Use a simple group chat of two agents to run the conversation
+        team = SelectorGroupChat(participants=[user_proxy, agent], max_turns=5, model_client=ollama_client)
+
+        # This can be run directly since we are in an async route.
+        final = None
+        async for event in team.run_stream(task=message):
+            final = event
+
+        reply = final.messages[-1].content if final and final.messages else "No response."
+
+        return jsonify({"reply": reply})
+    except Exception as e:
+        log.error("agent_run_error: %s", str(e))
+        return jsonify({"error": "agent_run_failed", "message": str(e)}), 500
 
 @app.get("/api/workspace/files")
 def api_files_flat():
