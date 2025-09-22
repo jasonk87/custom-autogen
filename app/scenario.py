@@ -1,79 +1,67 @@
 import json
-import re
 from typing import Any, Dict, List
-
-from autogen_ext.models.ollama import OllamaChatCompletionClient
+from pydantic import BaseModel, Field
+import ollama
 
 from app.config import OLLAMA_BASE_URL
 
-def _extract_json_from_response(response: str) -> List[Dict[str, Any]]:
-    """
-    Extracts a JSON array from the LLM's response.
-    The response might contain the JSON within a code block or with other text.
-    """
-    # Find the start of the JSON array
-    json_start = response.find('[')
-    # Find the end of the JSON array
-    json_end = response.rfind(']')
-    if json_start == -1 or json_end == -1:
-        raise ValueError("No JSON array found in the response")
+# Pydantic models for structured output
+class AgentConfig(BaseModel):
+    name: str = Field(..., description="A short, descriptive name for the agent (e.g., 'Programmer', 'President_A'). Use only letters, numbers, and underscores.")
+    system: str = Field(..., description="A detailed system message that defines the agent's role, personality, and capabilities.")
+    temperature: float = Field(default=0.3, description="The temperature setting for the agent's responses.")
 
-    json_str = response[json_start:json_end+1]
+class AgentList(BaseModel):
+    agents: List[AgentConfig]
 
-    try:
-        return json.loads(json_str)
-    except json.JSONDecodeError:
-        # The JSON might be escaped within a string, so we can try to unescape it
-        try:
-            return json.loads(json.loads(f'"{json_str}"'))
-        except (json.JSONDecodeError, TypeError):
-            raise ValueError("Failed to decode JSON from the response")
-
-async def generate_agents_from_scenario(scenario: str, model: str) -> List[Dict[str, Any]]:
+async def generate_agents_from_scenario(scenario: str, model: str, num_agents: int = 3) -> List[Dict[str, Any]]:
     """
-    Generates a list of agents from a scenario description using an LLM.
+    Generates a list of agents from a scenario description using an LLM
+    with structured output (JSON schema).
     """
-    client = OllamaChatCompletionClient(
-        model=model,
-        host=OLLAMA_BASE_URL,
-    )
+    client = ollama.AsyncClient(host=OLLAMA_BASE_URL)
 
     prompt = f"""
 You are an expert agent creator.
-Your task is to generate a list of agents that would be suitable for the following scenario:
+Your task is to generate a list of {num_agents} agents that would be suitable for the following scenario:
 "{scenario}"
 
-Please generate a JSON array of agent objects. Each object should have the following properties:
-- "name": A short, descriptive name for the agent (e.g., "Programmer", "President_A"). Use only letters, numbers, and underscores.
-- "system": A detailed system message that defines the agent's role, personality, and capabilities.
-
-Example output for the scenario "two presidents debating climate change":
-[
-    {{
-        "name": "President_A",
-        "system": "You are the president of a developed country. You are concerned about the economic impact of climate change policies."
-    }},
-    {{
-        "name": "President_B",
-        "system": "You are the president of a developing country. You are concerned about the impact of climate change on your country's environment and population."
-    }}
-]
-
-Now, generate the agents for the scenario: "{scenario}"
-Please only output the JSON array of agents.
+The agents should have diverse roles and capabilities to effectively collaborate on the scenario.
+Please generate a JSON object that conforms to the provided schema.
 """
 
-    response = await client.create(
+    response = await client.chat(
+        model=model,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.1,
+        format='json',
+        options={"temperature": 0.1}
     )
 
-    response_text = response.choices[0].message.content
+    # The response content is a JSON string, which we can validate with our Pydantic model
+    response_text = response['message']['content']
+    agent_list_obj = AgentList.model_validate_json(response_text)
 
-    agents = _extract_json_from_response(response_text)
+    # Convert the Pydantic models back to dictionaries for the rest of the app
+    agents = [agent.model_dump() for agent in agent_list_obj.agents]
 
-    # Add a default temperature to each agent
-    for agent in agents:
-        agent["temperature"] = 0.3
+    # Now, make a second call to generate a team goal
+    goal_prompt = f"""
+Based on the following scenario:
+"{scenario}"
 
-    return agents
+And the following team of agents that has been created:
+{json.dumps(agents, indent=2)}
+
+Please generate a single, concise, and actionable "Team Goal" for this team to accomplish.
+The goal should be a clear instruction that can be given to the team to start their work.
+Please only output the goal as a single string.
+"""
+
+    goal_response = await client.chat(
+        model=model,
+        messages=[{"role": "user", "content": goal_prompt}],
+        options={"temperature": 0.5}
+    )
+    suggested_goal = goal_response['message']['content'].strip()
+
+    return agents, suggested_goal

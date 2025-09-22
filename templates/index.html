@@ -102,7 +102,13 @@
         <div class="card">
           <div style="font-weight:700;margin-bottom:6px">Scenario Mode</div>
           <textarea id="scenario" placeholder="Describe a scenario, e.g. 'two presidents debating climate change' or 'a team of developers building a web app'"></textarea>
-          <button id="generate-agents" class="btn btn-primary" style="margin-top:6px">Create Agents from Scenario</button>
+          <div class="row" style="margin-top:6px; align-items:center;">
+            <div class="group" style="margin:0;">
+              <label>Number of Agents</label>
+              <input id="num-agents" type="number" min="2" max="10" value="3" />
+            </div>
+            <button id="generate-agents" class="btn btn-primary">Create Agents from Scenario</button>
+          </div>
         </div>
         <div class="group">
           <label>Team Goal</label>

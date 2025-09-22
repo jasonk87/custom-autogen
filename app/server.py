@@ -120,12 +120,13 @@ async def scenario_generate():
     data = await request.get_json()
     scenario = data.get("scenario")
     model = data.get("model")
+    num_agents = data.get("num_agents", 3)
     if not scenario:
         return jsonify({"error": "missing_scenario"}), 400
 
     try:
-        agents = await generate_agents_from_scenario(scenario, model)
-        return jsonify(agents)
+        agents, suggested_goal = await generate_agents_from_scenario(scenario, model, num_agents)
+        return jsonify({"agents": agents, "goal": suggested_goal})
     except Exception as e:
         log.error("failed_to_generate_agents", error=e)
         return jsonify({"error": str(e)}), 500
