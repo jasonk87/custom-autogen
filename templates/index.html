@@ -49,6 +49,14 @@
     .tree .node .node-actions button:hover{color:var(--text)}
     .tree .node-name-input{flex:1;background:#374151;color:var(--text);border:1px solid var(--blue);border-radius:4px;padding:0 2px}
 
+    /* Editor Tabs */
+    .editor-tab { background: #1f2937; color: var(--muted); padding: 8px 12px; border-radius: 6px 6px 0 0; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+    .editor-tab.active { background: #1e1e1e; color: var(--text); }
+    .editor-tab .close-tab { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 14px; padding: 0 4px; }
+    .editor-tab.active .close-tab { color: var(--text); }
+    .editor-tab .close-tab:hover { color: var(--red); }
+
+
     /* Thinking UI */
     #thinkdock{position:absolute;right:16px;bottom:72px;max-width:420px;width:min(42vw,420px);background:#0b213f;border:1px solid #23406e;border-radius:12px;box-shadow:0 10px 25px rgba(0,0,0,.35);display:none}
     #thinkhdr{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-bottom:1px solid #1f3a63}
@@ -156,9 +164,13 @@
       </section>
 
       <section id="editor" class="hidden" style="display:flex; flex-direction:column; padding:0; background:#1e1e1e; flex:1;">
-        <div style="padding: 8px; background: #333; display: flex; justify-content: flex-end; gap: 8px;">
-          <button id="new-file" class="btn btn-neutral">New File</button>
-          <button id="save-file" class="btn btn-primary">Save File</button>
+        <div style="padding: 8px; background: #333; display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+          <div id="editor-tabs" style="display: flex; gap: 4px;"></div>
+          <div>
+            <button id="format-code" class="btn btn-neutral">Format</button>
+            <button id="new-file" class="btn btn-neutral">New File</button>
+            <button id="save-file" class="btn btn-primary">Save File</button>
+          </div>
         </div>
         <div id="editor-container" style="width:100%; height:100%; flex:1;"></div>
       </section>

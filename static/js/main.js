@@ -2,6 +2,8 @@ const $=(s)=>document.querySelector(s); const $$=(s)=>Array.from(document.queryS
 let agents=[]; let streams={}; let es=null; let manualNames=[]; let lastModels=[]; let term=null; let ws=null; let editor=null;
 const think = { active:false, buffer:'', open:false, minimized:false };
 let graph = null;
+let openFiles = new Map(); // path -> { model, state }
+let activeFile = null;
 
 function toast(msg){ const t=document.createElement('div'); t.textContent=msg; t.style.cssText='position:fixed;right:12px;bottom:12px;background:#0b213f;color:#cfe4ff;border:1px solid #23406e;padding:10px 12px;border-radius:10px;box-shadow:0 10px 25px rgba(0,0,0,.35)'; document.body.appendChild(t); setTimeout(()=>t.remove(),3000); }
 function setStatus(state){ const S=$('#status'); const map={idle:'Status: Idle', running:'Status: Agents working…', waiting_for_input:'Status: Waiting for input…'}; S.textContent = map[state]||'Status'; $('#fb').disabled = state!=='waiting_for_input'; $('#send').disabled = state!=='waiting_for_input'; }
@@ -32,6 +34,109 @@ function renderTreeNode(node){ const icon=node.type==='file'?'📄':'📁'; cons
         ${actions}
       </div>`; let children=''; if(node.children&&node.children.length>0){ children=`<ul>${node.children.map(renderTreeNode).join('')}</ul>`} return`<li>${content}${children}</li>`}
 async function refreshTree(){ try{ const r=await fetch('/api/workspace/tree'); const d=await r.json(); const html='<ul>'+renderTreeNode(d)+'</ul>'; $('#tree').innerHTML=html; $('#tree').addEventListener('click',onTreeClick)}catch(e){console.error("Error in refreshTree:",e)}}
+function getLanguageForPath(path) {
+  const extension = '.' + path.split('.').pop();
+  const mapping = {
+    '.py': 'python',
+    '.js': 'javascript',
+    '.html': 'html',
+    '.css': 'css',
+    '.json': 'json',
+    '.md': 'markdown',
+    '.ts': 'typescript',
+    '.java': 'java',
+    '.go': 'go',
+    '.sh': 'shell',
+    '.yml': 'yaml',
+    '.yaml': 'yaml',
+    '.xml': 'xml',
+    '.php': 'php',
+    '.rb': 'ruby',
+    '.rs': 'rust',
+    '.sql': 'sql',
+    '.txt': 'plaintext',
+  };
+  return mapping[extension] || 'plaintext';
+}
+
+function renderTabs() {
+  const tabsContainer = $('#editor-tabs');
+  tabsContainer.innerHTML = '';
+  for (const [path, file] of openFiles.entries()) {
+    const tab = document.createElement('div');
+    tab.className = 'editor-tab';
+    if (path === activeFile) {
+      tab.classList.add('active');
+    }
+    tab.dataset.path = path;
+
+    const fileName = path.split('/').pop();
+    const dirtyIndicator = file.dirty ? ' *' : '';
+    tab.innerHTML = `
+      <span>${fileName}${dirtyIndicator}</span>
+      <button class="close-tab" data-path="${path}">×</button>
+    `;
+
+    tabsContainer.appendChild(tab);
+  }
+
+  // Add event listeners
+  $$('.editor-tab').forEach(tab => {
+    tab.addEventListener('click', (e) => {
+      if (e.target.classList.contains('close-tab')) {
+        closeFile(e.target.dataset.path);
+      } else {
+        switchToFile(tab.dataset.path);
+      }
+    });
+  });
+}
+
+function switchToFile(path) {
+  if (!openFiles.has(path)) return;
+
+  // Save current view state
+  if (activeFile && openFiles.has(activeFile)) {
+    openFiles.get(activeFile).state = editor.saveViewState();
+  }
+
+  activeFile = path;
+  const file = openFiles.get(path);
+  editor.setModel(file.model);
+  if (file.state) {
+    editor.restoreViewState(file.state);
+  }
+  editor.focus();
+  renderTabs();
+}
+
+function closeFile(path) {
+  if (!openFiles.has(path)) return;
+
+  const file = openFiles.get(path);
+  if (file.dirty) {
+    if (!confirm(`File ${path} has unsaved changes. Are you sure you want to close it?`)) {
+      return;
+    }
+  }
+
+  file.model.dispose();
+  openFiles.delete(path);
+
+  if (activeFile === path) {
+    activeFile = null;
+    const nextFile = openFiles.keys().next().value;
+    if (nextFile) {
+      switchToFile(nextFile);
+    } else {
+      editor.setModel(null);
+      $('#editor-tabs').innerHTML = '';
+    }
+  }
+
+  renderTabs();
+}
+
 async function onTreeClick(e) {
   const node = e.target.closest('.node');
   if (!node) return;
@@ -74,23 +179,37 @@ async function onTreeClick(e) {
       // Switch to editor tab
       $('#tab-editor').click();
 
-      // Set content
-      if (editor) {
-        editor.setValue(content);
-        editor.currentFile = path; // Store the path for saving later
-      } else {
-        // Editor not initialized yet, try again in a bit
-        setTimeout(() => {
-          if(editor) {
-            editor.setValue(content);
-            editor.currentFile = path;
-          } else {
-            toast('Editor could not be initialized.');
-          }
-        }, 500);
+      if (openFiles.has(path)) {
+        switchToFile(path);
+        return;
       }
-    } catch (err) {
-      toast(`Error opening file: ${err.message}`);
+
+      // It's a new file to open
+      try {
+        const r = await fetch(`/api/workspace/file?path=${encodeURIComponent(path)}`);
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({ error: 'Request failed' }));
+          throw new Error(err.message || err.error);
+        }
+        const content = await r.text();
+        const language = getLanguageForPath(path);
+
+        // Switch to editor tab
+        $('#tab-editor').click();
+
+        const model = monaco.editor.createModel(content, language);
+        openFiles.set(path, { model, state: null });
+
+        // Wait for editor to be initialized if it's not already
+        if (!editor) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+
+        switchToFile(path);
+
+      } catch (err) {
+        toast(`Error opening file: ${err.message}`);
+      }
     }
   }
 }
@@ -157,44 +276,70 @@ function initEditor() {
   require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' }});
   require(['vs/editor/editor.main'], () => {
     editor = monaco.editor.create($('#editor-container'), {
-      value: ['function x() {', '\tconsole.log("Hello world!");', '}'].join('\\n'),
-      language: 'javascript',
       theme: 'vs-dark'
+    });
+    editor.onDidChangeModelContent(() => {
+      if (activeFile && openFiles.has(activeFile)) {
+        const file = openFiles.get(activeFile);
+        if (!file.dirty) {
+          file.dirty = true;
+          renderTabs();
+        }
+      }
     });
   });
 }
 function setupTabs(){ const tabs=$$('.tab'); const sections=$$('section'); tabs.forEach(tab=>{ tab.onclick=()=>{ tabs.forEach(t=>t.classList.remove('active')); sections.forEach(s=>s.classList.add('hidden')); tab.classList.add('active'); const target=tab.id.replace('tab-',''); $(`#${target}`).classList.remove('hidden'); if(target==='work')refreshTree(); if(target==='editor')initEditor(); if(target==='terminal')initTerminal(); if(target==='graph'&&graph)graph.fitView(); if(target==='playground')loadTools()}})}
 document.addEventListener('DOMContentLoaded',()=>{ initGraph(); setupTabs(); $('#thinkmin').onclick=()=>{if(think.minimized)expandThinkDock();else collapseThinkDock()}; $('#thinkclose').onclick=()=>{closeThinkDock()}; $('#add').onclick=()=>{ const n=$('#aname').value.trim(); if(!n)return; const sanitizedName=n.replace(/[^a-zA-Z0-9_]/g,'_'); agents.push({name:sanitizedName,system:$('#asys').value.trim(),temperature:parseFloat($('#atemp').value)||0.3}); $('#aname').value=''; $('#asys').value=''; renderTeam(); saveSession()}; $('#generate-agents').onclick=async()=>{ const scenario=$('#scenario').value.trim(); if(!scenario){toast('Please enter a scenario description.');return} const btn=$('#generate-agents'); btn.disabled=true; btn.textContent='Generating...'; try{ const r=await fetch('/api/scenario/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenario,model:$('#model').value,num_agents:$('#num-agents').value})}); if(!r.ok){ const err=await r.json().catch(()=>({error:'Request failed'})); throw new Error(err.error)} const data=await r.json(); agents=data.agents; $('#goal').value=data.goal || ''; renderTeam(); toast('Agents and goal generated successfully.')}catch(e){toast('Failed to generate agents: '+e.message)}finally{ btn.disabled=false; btn.textContent='Create Agents from Scenario'}}; $('#fbform').onsubmit=async e=>{ e.preventDefault(); const v=$('#fb').value.trim(); if(!v)return; addMsg('You',v,true); await fetch('/user_input',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:v})}); $('#fb').value=''; setStatus('running')}; $('#upload').onclick=async()=>{ const f=$('#file').files[0]; if(!f)return; const fd=new FormData(); fd.append('file',f); const r=await fetch('/api/workspace/upload',{method:'POST',body:fd}); if(!r.ok){ const e=await r.json(); toast('Upload failed: '+(e.error||e.message))}else{ toast('Uploaded'); refreshTree()}}; $('#refresh').onclick=()=>{refreshTree()}; $('#new-folder').onclick=async()=>{ const path=prompt('Enter the new folder name (e.g., my_new_folder or nested/folder):'); if(path){ try{ const r=await fetch('/api/workspace/new_folder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})}); if(!r.ok){ const err=await r.json().catch(()=>({error:'Request failed'})); throw new Error(err.message||err.error)} toast(`Created folder ${path}`); refreshTree()}catch(err){toast(`Error creating folder: ${err.message}`)}}};
+$('#format-code').onclick = () => {
+    if (editor) {
+      editor.getAction('editor.action.formatDocument').run();
+    }
+  };
 $('#new-file').onclick = () => {
     if (!editor) {
-      toast('Editor not initialized.');
-      return;
+      initEditor();
     }
-    const path = prompt('Enter the new file name:');
+    const path = prompt('Enter the new file name (including path if needed):');
     if (path) {
-      editor.setValue('');
-      editor.currentFile = path;
-      toast(`New file '${path}' created. Type and save.`);
+      if (openFiles.has(path)) {
+        switchToFile(path);
+        return;
+      }
+      const language = getLanguageForPath(path);
+      const model = monaco.editor.createModel("", language);
+      openFiles.set(path, { model, state: null, isNew: true });
+      switchToFile(path);
+      toast(`New file '${path}' created locally. Save to persist.`);
     }
   };
 $('#save-file').onclick = async () => {
-    if (!editor || !editor.currentFile) {
-      toast('No file is open in the editor.');
+    if (!activeFile) {
+      toast('No file is active in the editor.');
       return;
     }
-    const content = editor.getValue();
-    const path = editor.currentFile;
+    const file = openFiles.get(activeFile);
+    if (!file) return;
+
+    const content = file.model.getValue();
+
     try {
       const r = await fetch('/api/workspace/file', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path, content })
+        body: JSON.stringify({ path: activeFile, content })
       });
       if (!r.ok) {
         const err = await r.json().catch(() => ({ error: 'Request failed' }));
         throw new Error(err.message || err.error);
       }
-      toast(`Saved ${path}`);
+      toast(`Saved ${activeFile}`);
+      file.dirty = false;
+      if (file.isNew) {
+        file.isNew = false;
+        refreshTree();
+      }
+      renderTabs();
     } catch (err) {
       toast(`Error saving file: ${err.message}`);
     }
