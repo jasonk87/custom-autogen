@@ -56,6 +56,11 @@
     .editor-tab.active .close-tab { color: var(--text); }
     .editor-tab .close-tab:hover { color: var(--red); }
 
+    /* Context Menu */
+    .context-menu { position: absolute; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); padding: 6px; z-index: 1000; display: none; }
+    .context-menu ul { list-style: none; padding: 0; margin: 0; }
+    .context-menu li { padding: 8px 12px; cursor: pointer; border-radius: 4px; }
+    .context-menu li:hover { background: var(--chip); }
 
     /* Thinking UI */
     #thinkdock{position:absolute;right:16px;bottom:72px;max-width:420px;width:min(42vw,420px);background:#0b213f;border:1px solid #23406e;border-radius:12px;box-shadow:0 10px 25px rgba(0,0,0,.35);display:none}
@@ -149,24 +154,29 @@
         </div>
       </section>
 
-      <section id="work" class="hidden">
+      <section id="work" class="hidden" style="display: flex; flex-direction: column;">
         <div class="ws-actions">
           <div class="ws-upload">
             <input id="file" type="file" />
             <button id="upload" class="btn btn-neutral">Upload File</button>
           </div>
           <div class="ws-buttons">
-            <button id="new-folder" class="btn btn-neutral">New Folder</button>
+            <button id="new-folder-ws" class="btn btn-neutral">New Folder</button>
             <button id="refresh" class="btn btn-neutral">Refresh</button>
           </div>
         </div>
-        <div class="tree" id="tree"></div>
+        <div class="group">
+          <input id="search-query" placeholder="Search workspace..." style="width: 100%;" />
+        </div>
+        <div id="search-results" style="overflow-y: auto; flex: 1; margin-top: 10px;"></div>
+        <div class="tree" id="tree" style="flex: 2; overflow-y: auto; border-top: 1px solid var(--border); padding-top: 10px;"></div>
       </section>
 
       <section id="editor" class="hidden" style="display:flex; flex-direction:column; padding:0; background:#1e1e1e; flex:1;">
         <div style="padding: 8px; background: #333; display: flex; justify-content: space-between; align-items: center; gap: 8px;">
           <div id="editor-tabs" style="display: flex; gap: 4px;"></div>
           <div>
+            <button id="run-file" class="btn btn-success">Run</button>
             <button id="format-code" class="btn btn-neutral">Format</button>
             <button id="new-file" class="btn btn-neutral">New File</button>
             <button id="save-file" class="btn btn-primary">Save File</button>
@@ -228,6 +238,20 @@
           <button id="probe" class="btn btn-neutral">Probe Ollama</button>
           <span id="probeHint" style="margin-left:8px;color:#9ca3af"></span>
         </div>
+        <hr style="border-color: var(--border); margin: 16px 0;">
+        <h2 style="font-size: 16px; margin-bottom: 12px;">Editor Settings</h2>
+        <div class="group">
+          <label>Editor Theme</label>
+          <select id="editor-theme">
+            <option value="vs-dark">VS Dark</option>
+            <option value="vs-light">VS Light</option>
+            <option value="hc-black">High Contrast Black</option>
+          </select>
+        </div>
+        <div class="group">
+          <label>Font Size</label>
+          <input id="editor-font-size" type="number" min="8" max="32" value="14">
+        </div>
       </section>
     </aside>
 
@@ -273,6 +297,15 @@
       </div>
     </div>
 
+<div id="context-menu" class="context-menu">
+  <ul>
+    <li id="ctx-open">Open</li>
+    <li id="ctx-rename">Rename</li>
+    <li id="ctx-delete">Delete</li>
+    <li id="ctx-new-file">New File</li>
+    <li id="ctx-new-folder">New Folder</li>
+  </ul>
+</div>
 <script src="/static/js/main.js"></script>
 </body>
 </html>

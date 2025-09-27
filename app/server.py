@@ -32,10 +32,11 @@ from .scenario import generate_agents_from_scenario
 from app.state import state
 from app.tools import TOOLS
 from app.utils import tree_listing
+import glob
 from autogen_agentchat.agents import AssistantAgent, UserProxyAgent
 from autogen_agentchat.messages import TextMessage
 from autogen_agentchat.teams import SelectorGroupChat
-from autogen_ext.models.ollama import OllamaChatCompletionClient
+from autogen_core.models import ChatCompletionClient
 
 # To handle templates and static files correctly when run from main.py
 app_dir = os.path.dirname(os.path.abspath(__file__))
@@ -192,7 +193,7 @@ async def api_agent_run():
 
     try:
         # 1. Create model client
-        ollama_client = OllamaChatCompletionClient(model=model, host=OLLAMA_BASE_URL)
+        ollama_client = ChatCompletionClient(model=model, host=OLLAMA_BASE_URL)
 
         # 2. Filter the tools based on the user's selection
         selected_tool_names = agent_config.get("tools", [])
@@ -377,6 +378,37 @@ async def api_rename_file():
         return jsonify({"error": "not_found"}), 404
     except OSError as e:
         return jsonify({"error": "os_error", "message": str(e)}), 500
+
+@app.get("/api/workspace/search")
+async def api_search_files():
+    query = request.args.get("query")
+    if not query:
+        return jsonify({"error": "missing_query"}), 400
+
+    base_path = os.path.abspath(WORKSPACE_DIR)
+    results = []
+
+    # Using glob to recursively find all files
+    all_files = glob.glob(os.path.join(base_path, "**/*"), recursive=True)
+
+    for file_path in all_files:
+        if os.path.isfile(file_path):
+            try:
+                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                    for i, line in enumerate(f):
+                        if query in line:
+                            # Return path relative to workspace dir
+                            relative_path = os.path.relpath(file_path, base_path)
+                            results.append({
+                                "path": relative_path,
+                                "line_number": i + 1,
+                                "line_content": line.strip()
+                            })
+            except Exception as e:
+                # Could be a binary file or other issue, just skip it
+                log.warn(f"Could not search file {file_path}: {e}")
+
+    return jsonify(results)
 
 @app.get("/api/sessions")
 def sessions_list():

@@ -214,6 +214,96 @@ async function onTreeClick(e) {
   }
 }
 function handleRename(renameButton){ const nodeDiv=renameButton.closest('.node'); const nameEl=nodeDiv.querySelector('.node-name'); const oldPath=renameButton.dataset.path; const oldName=nameEl.textContent; const input=document.createElement('input'); input.type='text'; input.value=oldName; input.className='node-name-input'; nameEl.replaceWith(input); input.focus(); input.select(); const finishRename=async()=>{ const newName=input.value.trim(); if(newName&&newName!==oldName){ const oldPathParts=oldPath.split('/'); const newPath=[...oldPathParts.slice(0,-1),newName].join('/'); try{ const r=await fetch('/api/workspace/rename',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({old_path:oldPath,new_path:newPath})}); if(!r.ok){ const err=await r.json().catch(()=>({error:'Request failed'})); throw new Error(err.message||err.error)} toast(`Renamed to ${newName}`)}catch(err){toast(`Error renaming: ${err.message}`)}} refreshTree()}; input.onblur=finishRename; input.onkeydown=e=>{ if(e.key==='Enter'){input.blur()}else if(e.key==='Escape'){input.onblur=null; refreshTree()}}}
+
+function setupContextMenu() {
+  const menu = $('#context-menu');
+  const tree = $('#tree');
+  let currentPath = null;
+  let currentType = null;
+
+  tree.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    const node = e.target.closest('.node');
+    if (!node) return;
+
+    currentPath = node.dataset.path;
+    currentType = node.dataset.type;
+
+    menu.style.display = 'block';
+    menu.style.left = `${e.pageX}px`;
+    menu.style.top = `${e.pageY}px`;
+
+    // Show/hide options based on type
+    $('#ctx-open').style.display = currentType === 'file' ? 'block' : 'none';
+    $('#ctx-new-file').style.display = currentType === 'directory' ? 'block' : 'none';
+    $('#ctx-new-folder').style.display = currentType === 'directory' ? 'block' : 'none';
+  });
+
+  document.addEventListener('click', () => {
+    menu.style.display = 'none';
+  });
+
+  menu.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    menu.style.display = 'none';
+    const action = e.target.id;
+
+    switch (action) {
+      case 'ctx-open':
+        if (currentType === 'file') {
+          // This will be handled by the existing onTreeClick logic
+          const node = $(`div.node[data-path="${currentPath}"]`);
+          if (node) node.click();
+        }
+        break;
+      case 'ctx-rename':
+        const renameButton = $(`.rename-node[data-path="${currentPath}"]`);
+        if(renameButton) handleRename(renameButton);
+        break;
+      case 'ctx-delete':
+        const deleteButton = $(`.delete-node[data-path="${currentPath}"]`);
+        if(deleteButton) deleteButton.click();
+        break;
+      case 'ctx-new-file':
+        const newFilePath = prompt(`Enter new file name in ${currentPath}:`);
+        if (newFilePath) {
+          const fullPath = currentPath === '.' ? newFilePath : `${currentPath}/${newFilePath}`;
+          // Use existing new file logic, but non-interactively
+           if (openFiles.has(fullPath)) {
+            switchToFile(fullPath);
+            return;
+          }
+          const language = getLanguageForPath(fullPath);
+          const model = monaco.editor.createModel("", language);
+          openFiles.set(fullPath, { model, state: null, isNew: true });
+          switchToFile(fullPath);
+          toast(`New file '${fullPath}' created locally. Save to persist.`);
+        }
+        break;
+      case 'ctx-new-folder':
+        const newFolderPath = prompt(`Enter new folder name in ${currentPath}:`);
+        if (newFolderPath) {
+          const fullPath = currentPath === '.' ? newFolderPath : `${currentPath}/${newFolderPath}`;
+           try {
+            const r = await fetch('/api/workspace/new_folder', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ path: fullPath })
+            });
+            if (!r.ok) {
+              const err = await r.json().catch(() => ({ error: 'Request failed' }));
+              throw new Error(err.message || err.error);
+            }
+            toast(`Created folder ${fullPath}`);
+            refreshTree();
+          } catch (err) {
+            toast(`Error creating folder: ${err.message}`);
+          }
+        }
+        break;
+    }
+  });
+}
 async function loadModels(){ $('#model').innerHTML='<option>Loading…</option>'; try{ const r=await fetch('/api/models'); const models=await r.json(); const sel=$('#model'); if(Array.isArray(models)&&models.length){ sel.innerHTML=models.map(m=>`<option>${m}</option>`).join(''); const def=models.includes('qwen3:8b')?'qwen3:8b':models[0]; sel.value=def; $('#model-hint').textContent=`Loaded ${models.length} models from Ollama`; $('#model-count').textContent=models.length+' found'; lastModels=models}else{ sel.innerHTML=''; $('#model-hint').textContent='No models found'; $('#model-count').textContent='0 found'}}catch(e){ $('#model').innerHTML=''; $('#model-hint').textContent='Failed to load models: '+e.message; $('#model-count').textContent='error'}}
 const origAddMsg=addMsg; addMsg=function(sender,text,mine=false,id=null){ window.__transcript=(window.__transcript||[]).concat([{t:Date.now(),from:sender,text}]); return origAddMsg(sender,text,mine,id)};
 function saveSession(){ try{ const session={goal:$('#goal').value,agents:agents}; localStorage.setItem('agentStudioSession',JSON.stringify(session))}catch(e){console.error("Failed to save session",e)}}
@@ -271,12 +361,45 @@ async function loadTools(){ try{ const r=await fetch('/api/tools'); const tools=
         <input type="checkbox" class="playground-tool-checkbox" value="${t.name}" />
         <span>${t.name}</span>
       </label>`).join('')}catch(e){console.error("Failed to load tools",e)}}
+function applyEditorSettings() {
+  if (!editor) return;
+  const settings = getEditorSettings();
+  editor.updateOptions({
+    fontSize: settings.fontSize,
+  });
+  monaco.editor.setTheme(settings.theme);
+}
+
+function getEditorSettings() {
+  try {
+    const saved = localStorage.getItem('editorSettings');
+    if (saved) {
+      return JSON.parse(saved);
+    }
+  } catch (e) {}
+  return { theme: 'vs-dark', fontSize: 14 };
+}
+
+function saveEditorSettings() {
+  const settings = {
+    theme: $('#editor-theme').value,
+    fontSize: parseInt($('#editor-font-size').value, 10),
+  };
+  localStorage.setItem('editorSettings', JSON.stringify(settings));
+  return settings;
+}
+
 function initEditor() {
   if (editor) return; // Already initialized
   require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' }});
+  const settings = getEditorSettings();
+  $('#editor-theme').value = settings.theme;
+  $('#editor-font-size').value = settings.fontSize;
+
   require(['vs/editor/editor.main'], () => {
     editor = monaco.editor.create($('#editor-container'), {
-      theme: 'vs-dark'
+      theme: settings.theme,
+      fontSize: settings.fontSize
     });
     editor.onDidChangeModelContent(() => {
       if (activeFile && openFiles.has(activeFile)) {
@@ -290,7 +413,59 @@ function initEditor() {
   });
 }
 function setupTabs(){ const tabs=$$('.tab'); const sections=$$('section'); tabs.forEach(tab=>{ tab.onclick=()=>{ tabs.forEach(t=>t.classList.remove('active')); sections.forEach(s=>s.classList.add('hidden')); tab.classList.add('active'); const target=tab.id.replace('tab-',''); $(`#${target}`).classList.remove('hidden'); if(target==='work')refreshTree(); if(target==='editor')initEditor(); if(target==='terminal')initTerminal(); if(target==='graph'&&graph)graph.fitView(); if(target==='playground')loadTools()}})}
-document.addEventListener('DOMContentLoaded',()=>{ initGraph(); setupTabs(); $('#thinkmin').onclick=()=>{if(think.minimized)expandThinkDock();else collapseThinkDock()}; $('#thinkclose').onclick=()=>{closeThinkDock()}; $('#add').onclick=()=>{ const n=$('#aname').value.trim(); if(!n)return; const sanitizedName=n.replace(/[^a-zA-Z0-9_]/g,'_'); agents.push({name:sanitizedName,system:$('#asys').value.trim(),temperature:parseFloat($('#atemp').value)||0.3}); $('#aname').value=''; $('#asys').value=''; renderTeam(); saveSession()}; $('#generate-agents').onclick=async()=>{ const scenario=$('#scenario').value.trim(); if(!scenario){toast('Please enter a scenario description.');return} const btn=$('#generate-agents'); btn.disabled=true; btn.textContent='Generating...'; try{ const r=await fetch('/api/scenario/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenario,model:$('#model').value,num_agents:$('#num-agents').value})}); if(!r.ok){ const err=await r.json().catch(()=>({error:'Request failed'})); throw new Error(err.error)} const data=await r.json(); agents=data.agents; $('#goal').value=data.goal || ''; renderTeam(); toast('Agents and goal generated successfully.')}catch(e){toast('Failed to generate agents: '+e.message)}finally{ btn.disabled=false; btn.textContent='Create Agents from Scenario'}}; $('#fbform').onsubmit=async e=>{ e.preventDefault(); const v=$('#fb').value.trim(); if(!v)return; addMsg('You',v,true); await fetch('/user_input',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:v})}); $('#fb').value=''; setStatus('running')}; $('#upload').onclick=async()=>{ const f=$('#file').files[0]; if(!f)return; const fd=new FormData(); fd.append('file',f); const r=await fetch('/api/workspace/upload',{method:'POST',body:fd}); if(!r.ok){ const e=await r.json(); toast('Upload failed: '+(e.error||e.message))}else{ toast('Uploaded'); refreshTree()}}; $('#refresh').onclick=()=>{refreshTree()}; $('#new-folder').onclick=async()=>{ const path=prompt('Enter the new folder name (e.g., my_new_folder or nested/folder):'); if(path){ try{ const r=await fetch('/api/workspace/new_folder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})}); if(!r.ok){ const err=await r.json().catch(()=>({error:'Request failed'})); throw new Error(err.message||err.error)} toast(`Created folder ${path}`); refreshTree()}catch(err){toast(`Error creating folder: ${err.message}`)}}};
+document.addEventListener('DOMContentLoaded',()=>{ initGraph(); setupTabs(); setupContextMenu(); $('#thinkmin').onclick=()=>{if(think.minimized)expandThinkDock();else collapseThinkDock()}; $('#thinkclose').onclick=()=>{closeThinkDock()}; $('#add').onclick=()=>{ const n=$('#aname').value.trim(); if(!n)return; const sanitizedName=n.replace(/[^a-zA-Z0-9_]/g,'_'); agents.push({name:sanitizedName,system:$('#asys').value.trim(),temperature:parseFloat($('#atemp').value)||0.3}); $('#aname').value=''; $('#asys').value=''; renderTeam(); saveSession()}; $('#generate-agents').onclick=async()=>{ const scenario=$('#scenario').value.trim(); if(!scenario){toast('Please enter a scenario description.');return} const btn=$('#generate-agents'); btn.disabled=true; btn.textContent='Generating...'; try{ const r=await fetch('/api/scenario/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenario,model:$('#model').value,num_agents:$('#num-agents').value})}); if(!r.ok){ const err=await r.json().catch(()=>({error:'Request failed'})); throw new Error(err.error)} const data=await r.json(); agents=data.agents; $('#goal').value=data.goal || ''; renderTeam(); toast('Agents and goal generated successfully.')}catch(e){toast('Failed to generate agents: '+e.message)}finally{ btn.disabled=false; btn.textContent='Create Agents from Scenario'}}; $('#fbform').onsubmit=async e=>{ e.preventDefault(); const v=$('#fb').value.trim(); if(!v)return; addMsg('You',v,true); await fetch('/user_input',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:v})}); $('#fb').value=''; setStatus('running')}; $('#upload').onclick=async()=>{ const f=$('#file').files[0]; if(!f)return; const fd=new FormData(); fd.append('file',f); const r=await fetch('/api/workspace/upload',{method:'POST',body:fd}); if(!r.ok){ const e=await r.json(); toast('Upload failed: '+(e.error||e.message))}else{ toast('Uploaded'); refreshTree()}}; $('#refresh').onclick=()=>{refreshTree()};
+$('#new-folder-ws').onclick=async()=>{ const path=prompt('Enter the new folder name (e.g., my_new_folder or nested/folder):'); if(path){ try{ const r=await fetch('/api/workspace/new_folder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})}); if(!r.ok){ const err=await r.json().catch(()=>({error:'Request failed'})); throw new Error(err.message||err.error)} toast(`Created folder ${path}`); refreshTree()}catch(err){toast(`Error creating folder: ${err.message}`)}}};
+let searchTimeout;
+$('#search-query').addEventListener('input', () => {
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(async () => {
+        const query = $('#search-query').value;
+        if (query.length < 2) {
+            $('#search-results').innerHTML = '';
+            return;
+        }
+        const r = await fetch(`/api/workspace/search?query=${encodeURIComponent(query)}`);
+        const results = await r.json();
+        const resultsEl = $('#search-results');
+        resultsEl.innerHTML = '';
+        if (results.length === 0) {
+            resultsEl.innerHTML = '<div style="color: var(--muted); padding: 8px;">No results found.</div>';
+            return;
+        }
+        results.forEach(res => {
+            const resultEl = document.createElement('div');
+            resultEl.className = 'search-result';
+            resultEl.style.cssText = 'padding: 6px; cursor: pointer; border-radius: 4px; margin-bottom: 4px;';
+            resultEl.innerHTML = `<strong style="color: var(--blue);">${res.path}</strong>:<span style="color: var(--amber);">${res.line_number}</span> <div style="color: var(--muted); white-space: pre-wrap; background: #2b3443; padding: 4px; border-radius: 4px;">${res.line_content}</div>`;
+            resultEl.onclick = () => {
+                 const node = $(`div.node[data-path="${res.path}"]`);
+                 if(node) {
+                    node.click();
+                    setTimeout(() => {
+                        if(editor) {
+                            editor.revealLineInCenter(res.line_number);
+                            editor.setPosition({ lineNumber: res.line_number, column: 1 });
+                            editor.focus();
+                        }
+                    }, 200);
+                 }
+            };
+            resultsEl.appendChild(resultEl);
+        });
+        $$('.search-result').forEach(el => {
+            el.addEventListener('mouseover', () => el.style.backgroundColor = 'var(--chip)');
+            el.addEventListener('mouseout', () => el.style.backgroundColor = 'transparent');
+        });
+    }, 300);
+});
+$('#editor-theme').addEventListener('change', () => {
+  saveEditorSettings();
+  applyEditorSettings();
+});
+$('#editor-font-size').addEventListener('change', () => {
+  saveEditorSettings();
+  applyEditorSettings();
+});
 $('#format-code').onclick = () => {
     if (editor) {
       editor.getAction('editor.action.formatDocument').run();
@@ -313,6 +488,45 @@ $('#new-file').onclick = () => {
       toast(`New file '${path}' created locally. Save to persist.`);
     }
   };
+$('#run-file').onclick = () => {
+    if (!activeFile) {
+      toast('No file is active to run.');
+      return;
+    }
+
+    const getCommand = (path) => {
+      const ext = path.split('.').pop();
+      switch (ext) {
+        case 'py': return `python ${path}\n`;
+        case 'js': return `node ${path}\n`;
+        case 'sh': return `bash ${path}\n`;
+        default:
+          toast(`Don't know how to run '.${ext}' files.`);
+          return null;
+      }
+    };
+
+    const command = getCommand(activeFile);
+    if (command) {
+      // Switch to terminal
+      $('#tab-terminal').click();
+
+      // Send command to terminal websocket
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(command);
+      } else {
+        // Wait a moment for terminal to connect
+        setTimeout(() => {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(command);
+          } else {
+            toast('Terminal is not connected.');
+          }
+        }, 500);
+      }
+    }
+  };
+
 $('#save-file').onclick = async () => {
     if (!activeFile) {
       toast('No file is active in the editor.');
