@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from autogen_agentchat.agents import AssistantAgent, UserProxyAgent
 from autogen_agentchat.messages import ModelClientStreamingChunkEvent, TextMessage, BaseChatMessage, BaseAgentEvent, SelectSpeakerEvent
 from autogen_agentchat.teams import SelectorGroupChat
-from autogen_core.models import ChatCompletionClient
+from autogen_ext.models.ollama import OllamaChatCompletionClient
 
 from app.config import OLLAMA_BASE_URL, DEFAULT_MODEL
 from app.state import state
@@ -66,7 +66,7 @@ class MyUserProxyAgent(UserProxyAgent):
 async def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any]], manager_mode: str, out_q: "queue.Queue[str]", max_turns: int = 60, human_proxy: bool = False, temperature: float = 0.3):
     try:
         # 1. Create model client
-        ollama_client = ChatCompletionClient(
+        ollama_client = OllamaChatCompletionClient(
             model=model or DEFAULT_MODEL,
             host=OLLAMA_BASE_URL,
             temperature=temperature,

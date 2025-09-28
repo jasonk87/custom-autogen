@@ -1,9 +1,9 @@
 const $=(s)=>document.querySelector(s); const $$=(s)=>Array.from(document.querySelectorAll(s));
 let agents=[]; let streams={}; let es=null; let manualNames=[]; let lastModels=[]; let term=null; let ws=null; let editor=null;
+let openFiles = new Map();
+let activeFile = null;
 const think = { active:false, buffer:'', open:false, minimized:false };
 let graph = null;
-let openFiles = new Map(); // path -> { model, state }
-let activeFile = null;
 
 function toast(msg){ const t=document.createElement('div'); t.textContent=msg; t.style.cssText='position:fixed;right:12px;bottom:12px;background:#0b213f;color:#cfe4ff;border:1px solid #23406e;padding:10px 12px;border-radius:10px;box-shadow:0 10px 25px rgba(0,0,0,.35)'; document.body.appendChild(t); setTimeout(()=>t.remove(),3000); }
 function setStatus(state){ const S=$('#status'); const map={idle:'Status: Idle', running:'Status: Agents working…', waiting_for_input:'Status: Waiting for input…'}; S.textContent = map[state]||'Status'; $('#fb').disabled = state!=='waiting_for_input'; $('#send').disabled = state!=='waiting_for_input'; }
@@ -27,283 +27,21 @@ function renderTeam(){ const teamContainer=$('#team'); if(!agents.length){ teamC
       </div>`).join(''); $$('.name').forEach(el=>{ el.onchange=()=>{ agents[el.dataset.i].name=el.value; saveSession()}}); $$('.sys').forEach(el=>{ el.onchange=()=>{ agents[el.dataset.i].system=el.value; saveSession()}}); $$('.num').forEach(el=>{ el.onchange=()=>{ agents[el.dataset.i].temperature=parseFloat(el.value||'0.3'); saveSession()}}); $$('.rm').forEach(el=>{ el.onclick=()=>{ agents.splice(+el.dataset.i,1); renderTeam(); saveSession()}}); $$('.up').forEach(el=>{ el.onclick=()=>{ const i=+el.dataset.i; if(i>0){[agents[i-1],agents[i]]=[agents[i],agents[i-1]]; renderTeam(); saveSession()}}}); $$('.down').forEach(el=>{ el.onclick=()=>{ const i=+el.dataset.i; if(i<agents.length-1){[agents[i+1],agents[i]]=[agents[i],agents[i+1]]; renderTeam(); saveSession()}}})}
 function buttons(running){ const A=$('#actions'); if(running){ let manual=$('#mode').value==='Manual'; A.innerHTML=`<div style='display:grid;grid-template-columns:${manual?'1fr 1fr':'1fr'};gap:8px'> <button id='stop' class='btn btn-danger'>Stop</button> ${manual?"<div style='display:flex;gap:6px'><select id='manual-chooser' class='sys'></select><button id='step2' class='btn btn-success'>Step</button></div>":""} </div>`; $('#stop').onclick=async()=>{ if(es)es.close(); await fetch('/stop',{method:'POST'}); setStatus('idle'); buttons(false); addMsg('System','Task aborted',true); closeThinkDock()}; if(manual){ const sel=$('#manual-chooser'); sel.innerHTML=manualNames.map(n=>`<option>${n}</option>`).join(''); $('#step2').onclick=()=>fetch('/choose_next',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:sel.value})})}}else{ A.innerHTML=`<button id='start' class='btn btn-primary' style='width:100%'>Start</button>`; $('#start').onclick=startRun}}
 async function startRun(){ if(agents.length<2){toast('Add at least two agents to start.');return} if(es)es.close(); $('#chat').innerHTML=''; closeThinkDock(); streams={}; addMsg('System','Task started'); setStatus('running'); buttons(true); manualNames=agents.map(a=>a.name).concat(['Human_Admin']); if(graph){graph.clear(); graph.paint()}; const payload=new URLSearchParams({model:$('#model').value,goal:btoa($('#goal').value||''),agents:btoa(JSON.stringify(agents)),manager_mode:$('#mode').value,turns:$('#turns').value||'',temperature:$('#temperature').value||'0.3'}); es=new EventSource('/stream?'+payload.toString()); es.onmessage=ev=>{ if(ev.data==='[DONE]'){es.close(); setStatus('idle'); buttons(false); addMsg('System','Task complete');return} try{ const d=JSON.parse(ev.data); if(d.type==='status'){setStatus(d.state)}else if(d.type==='chat'){addMsg(d.sender,d.message,false); if(d.graph_edge){updateGraph(d.graph_edge)}}else if(d.type==='stream_start'){addMsg(d.sender,'',false,d.id)}else if(d.type==='token'){appendToken(d.id,d.delta)}else if(d.type==='stream_end'){}}catch(e){}}; es.onerror=()=>{addMsg('Error','Connection lost',true); try{es.close()}catch{} setStatus('idle'); buttons(false)}}
+function renderTreeNode(node){ const icon=node.type==='file'?'📄':'📁'; const actions=`<div class="node-actions"><button class="rename-node" data-path="${node.path}" title="Rename">✏️</button><button class="delete-node" data-path="${node.path}" title="Delete">✕</button></div>`; const nameEl=node.type==='file'?`<a href="/workspace/${node.path}" target="_blank" class="node-name">${node.name}</a>`:`<span class="node-name">${node.name}</span>`; const content=`
+      <div class="node" data-path="${node.path}">
+        <span class="node-icon">${icon}</span>
+        ${nameEl}
+        ${actions}
+      </div>`; let children=''; if(node.children&&node.children.length>0){ children=`<ul>${node.children.map(renderTreeNode).join('')}</ul>`} return`<li>${content}${children}</li>`}
+async function refreshTree(){ try{ const r=await fetch('/api/workspace/tree'); const d=await r.json(); const html='<ul>'+renderTreeNode(d)+'</ul>'; $('#tree').innerHTML=html; $('#tree').addEventListener('click',onTreeClick)}catch(e){console.error("Error in refreshTree:",e)}}
 function renderTreeNode(node){ const icon=node.type==='file'?'📄':'📁'; const actions=`<div class="node-actions"><button class="rename-node" data-path="${node.path}" title="Rename">✏️</button><button class="delete-node" data-path="${node.path}" title="Delete">✕</button></div>`; const nameEl=node.type==='file'?`<span class="node-name">${node.name}</span>`:`<span class="node-name">${node.name}</span>`; const content=`
       <div class="node" data-path="${node.path}" data-type="${node.type}">
         <span class="node-icon">${icon}</span>
         ${nameEl}
         ${actions}
       </div>`; let children=''; if(node.children&&node.children.length>0){ children=`<ul>${node.children.map(renderTreeNode).join('')}</ul>`} return`<li>${content}${children}</li>`}
-async function refreshTree(){ try{ const r=await fetch('/api/workspace/tree'); const d=await r.json(); const html='<ul>'+renderTreeNode(d)+'</ul>'; $('#tree').innerHTML=html; $('#tree').addEventListener('click',onTreeClick)}catch(e){console.error("Error in refreshTree:",e)}}
-function getLanguageForPath(path) {
-  const extension = '.' + path.split('.').pop();
-  const mapping = {
-    '.py': 'python',
-    '.js': 'javascript',
-    '.html': 'html',
-    '.css': 'css',
-    '.json': 'json',
-    '.md': 'markdown',
-    '.ts': 'typescript',
-    '.java': 'java',
-    '.go': 'go',
-    '.sh': 'shell',
-    '.yml': 'yaml',
-    '.yaml': 'yaml',
-    '.xml': 'xml',
-    '.php': 'php',
-    '.rb': 'ruby',
-    '.rs': 'rust',
-    '.sql': 'sql',
-    '.txt': 'plaintext',
-  };
-  return mapping[extension] || 'plaintext';
-}
-
-function renderTabs() {
-  const tabsContainer = $('#editor-tabs');
-  tabsContainer.innerHTML = '';
-  for (const [path, file] of openFiles.entries()) {
-    const tab = document.createElement('div');
-    tab.className = 'editor-tab';
-    if (path === activeFile) {
-      tab.classList.add('active');
-    }
-    tab.dataset.path = path;
-
-    const fileName = path.split('/').pop();
-    const dirtyIndicator = file.dirty ? ' *' : '';
-    tab.innerHTML = `
-      <span>${fileName}${dirtyIndicator}</span>
-      <button class="close-tab" data-path="${path}">×</button>
-    `;
-
-    tabsContainer.appendChild(tab);
-  }
-
-  // Add event listeners
-  $$('.editor-tab').forEach(tab => {
-    tab.addEventListener('click', (e) => {
-      if (e.target.classList.contains('close-tab')) {
-        closeFile(e.target.dataset.path);
-      } else {
-        switchToFile(tab.dataset.path);
-      }
-    });
-  });
-}
-
-function switchToFile(path) {
-  if (!openFiles.has(path)) return;
-
-  // Save current view state
-  if (activeFile && openFiles.has(activeFile)) {
-    openFiles.get(activeFile).state = editor.saveViewState();
-  }
-
-  activeFile = path;
-  const file = openFiles.get(path);
-  editor.setModel(file.model);
-  if (file.state) {
-    editor.restoreViewState(file.state);
-  }
-  editor.focus();
-  renderTabs();
-}
-
-function closeFile(path) {
-  if (!openFiles.has(path)) return;
-
-  const file = openFiles.get(path);
-  if (file.dirty) {
-    if (!confirm(`File ${path} has unsaved changes. Are you sure you want to close it?`)) {
-      return;
-    }
-  }
-
-  file.model.dispose();
-  openFiles.delete(path);
-
-  if (activeFile === path) {
-    activeFile = null;
-    const nextFile = openFiles.keys().next().value;
-    if (nextFile) {
-      switchToFile(nextFile);
-    } else {
-      editor.setModel(null);
-      $('#editor-tabs').innerHTML = '';
-    }
-  }
-
-  renderTabs();
-}
-
-async function onTreeClick(e) {
-  const node = e.target.closest('.node');
-  if (!node) return;
-
-  const path = node.dataset.path;
-  const type = node.dataset.type;
-
-  if (e.target.classList.contains('delete-node')) {
-    if (confirm(`Are you sure you want to delete '${path}'?`)) {
-      try {
-        const r = await fetch('/api/workspace/delete', {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path })
-        });
-        if (!r.ok) {
-          const err = await r.json().catch(() => ({ error: 'Request failed' }));
-          throw new Error(err.message || err.error);
-        }
-        toast(`Deleted ${path}`);
-        refreshTree();
-      } catch (err) {
-        toast(`Error deleting ${path}: ${err.message}`);
-      }
-    }
-  } else if (e.target.classList.contains('rename-node')) {
-    e.preventDefault();
-    e.stopPropagation();
-    handleRename(e.target);
-  } else if (type === 'file') {
-    // It's a file node, open it in the editor
-    try {
-      const r = await fetch(`/api/workspace/file?path=${encodeURIComponent(path)}`);
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({ error: 'Request failed' }));
-        throw new Error(err.message || err.error);
-      }
-      const content = await r.text();
-
-      // Switch to editor tab
-      $('#tab-editor').click();
-
-      if (openFiles.has(path)) {
-        switchToFile(path);
-        return;
-      }
-
-      // It's a new file to open
-      try {
-        const r = await fetch(`/api/workspace/file?path=${encodeURIComponent(path)}`);
-        if (!r.ok) {
-          const err = await r.json().catch(() => ({ error: 'Request failed' }));
-          throw new Error(err.message || err.error);
-        }
-        const content = await r.text();
-        const language = getLanguageForPath(path);
-
-        // Switch to editor tab
-        $('#tab-editor').click();
-
-        const model = monaco.editor.createModel(content, language);
-        openFiles.set(path, { model, state: null });
-
-        // Wait for editor to be initialized if it's not already
-        if (!editor) {
-          await new Promise(resolve => setTimeout(resolve, 100));
-        }
-
-        switchToFile(path);
-
-      } catch (err) {
-        toast(`Error opening file: ${err.message}`);
-      }
-    }
-  }
-}
+async function onTreeClick(e){ if(e.target.classList.contains('delete-node')){ const path=e.target.dataset.path; if(confirm(`Are you sure you want to delete '${path}'?`)){ try{ const r=await fetch('/api/workspace/delete',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})}); if(!r.ok){ const err=await r.json().catch(()=>({error:'Request failed'})); throw new Error(err.message||err.error)} toast(`Deleted ${path}`); refreshTree()}catch(err){toast(`Error deleting ${path}: ${err.message}`)}}}else if(e.target.classList.contains('rename-node')){ e.preventDefault(); e.stopPropagation(); handleRename(e.target)}}
 function handleRename(renameButton){ const nodeDiv=renameButton.closest('.node'); const nameEl=nodeDiv.querySelector('.node-name'); const oldPath=renameButton.dataset.path; const oldName=nameEl.textContent; const input=document.createElement('input'); input.type='text'; input.value=oldName; input.className='node-name-input'; nameEl.replaceWith(input); input.focus(); input.select(); const finishRename=async()=>{ const newName=input.value.trim(); if(newName&&newName!==oldName){ const oldPathParts=oldPath.split('/'); const newPath=[...oldPathParts.slice(0,-1),newName].join('/'); try{ const r=await fetch('/api/workspace/rename',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({old_path:oldPath,new_path:newPath})}); if(!r.ok){ const err=await r.json().catch(()=>({error:'Request failed'})); throw new Error(err.message||err.error)} toast(`Renamed to ${newName}`)}catch(err){toast(`Error renaming: ${err.message}`)}} refreshTree()}; input.onblur=finishRename; input.onkeydown=e=>{ if(e.key==='Enter'){input.blur()}else if(e.key==='Escape'){input.onblur=null; refreshTree()}}}
-
-function setupContextMenu() {
-  const menu = $('#context-menu');
-  const tree = $('#tree');
-  let currentPath = null;
-  let currentType = null;
-
-  tree.addEventListener('contextmenu', (e) => {
-    e.preventDefault();
-    const node = e.target.closest('.node');
-    if (!node) return;
-
-    currentPath = node.dataset.path;
-    currentType = node.dataset.type;
-
-    menu.style.display = 'block';
-    menu.style.left = `${e.pageX}px`;
-    menu.style.top = `${e.pageY}px`;
-
-    // Show/hide options based on type
-    $('#ctx-open').style.display = currentType === 'file' ? 'block' : 'none';
-    $('#ctx-new-file').style.display = currentType === 'directory' ? 'block' : 'none';
-    $('#ctx-new-folder').style.display = currentType === 'directory' ? 'block' : 'none';
-  });
-
-  document.addEventListener('click', () => {
-    menu.style.display = 'none';
-  });
-
-  menu.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    menu.style.display = 'none';
-    const action = e.target.id;
-
-    switch (action) {
-      case 'ctx-open':
-        if (currentType === 'file') {
-          // This will be handled by the existing onTreeClick logic
-          const node = $(`div.node[data-path="${currentPath}"]`);
-          if (node) node.click();
-        }
-        break;
-      case 'ctx-rename':
-        const renameButton = $(`.rename-node[data-path="${currentPath}"]`);
-        if(renameButton) handleRename(renameButton);
-        break;
-      case 'ctx-delete':
-        const deleteButton = $(`.delete-node[data-path="${currentPath}"]`);
-        if(deleteButton) deleteButton.click();
-        break;
-      case 'ctx-new-file':
-        const newFilePath = prompt(`Enter new file name in ${currentPath}:`);
-        if (newFilePath) {
-          const fullPath = currentPath === '.' ? newFilePath : `${currentPath}/${newFilePath}`;
-          // Use existing new file logic, but non-interactively
-           if (openFiles.has(fullPath)) {
-            switchToFile(fullPath);
-            return;
-          }
-          const language = getLanguageForPath(fullPath);
-          const model = monaco.editor.createModel("", language);
-          openFiles.set(fullPath, { model, state: null, isNew: true });
-          switchToFile(fullPath);
-          toast(`New file '${fullPath}' created locally. Save to persist.`);
-        }
-        break;
-      case 'ctx-new-folder':
-        const newFolderPath = prompt(`Enter new folder name in ${currentPath}:`);
-        if (newFolderPath) {
-          const fullPath = currentPath === '.' ? newFolderPath : `${currentPath}/${newFolderPath}`;
-           try {
-            const r = await fetch('/api/workspace/new_folder', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ path: fullPath })
-            });
-            if (!r.ok) {
-              const err = await r.json().catch(() => ({ error: 'Request failed' }));
-              throw new Error(err.message || err.error);
-            }
-            toast(`Created folder ${fullPath}`);
-            refreshTree();
-          } catch (err) {
-            toast(`Error creating folder: ${err.message}`);
-          }
-        }
-        break;
-    }
-  });
-}
 async function loadModels(){ $('#model').innerHTML='<option>Loading…</option>'; try{ const r=await fetch('/api/models'); const models=await r.json(); const sel=$('#model'); if(Array.isArray(models)&&models.length){ sel.innerHTML=models.map(m=>`<option>${m}</option>`).join(''); const def=models.includes('qwen3:8b')?'qwen3:8b':models[0]; sel.value=def; $('#model-hint').textContent=`Loaded ${models.length} models from Ollama`; $('#model-count').textContent=models.length+' found'; lastModels=models}else{ sel.innerHTML=''; $('#model-hint').textContent='No models found'; $('#model-count').textContent='0 found'}}catch(e){ $('#model').innerHTML=''; $('#model-hint').textContent='Failed to load models: '+e.message; $('#model-count').textContent='error'}}
 const origAddMsg=addMsg; addMsg=function(sender,text,mine=false,id=null){ window.__transcript=(window.__transcript||[]).concat([{t:Date.now(),from:sender,text}]); return origAddMsg(sender,text,mine,id)};
 function saveSession(){ try{ const session={goal:$('#goal').value,agents:agents}; localStorage.setItem('agentStudioSession',JSON.stringify(session))}catch(e){console.error("Failed to save session",e)}}
@@ -361,45 +99,12 @@ async function loadTools(){ try{ const r=await fetch('/api/tools'); const tools=
         <input type="checkbox" class="playground-tool-checkbox" value="${t.name}" />
         <span>${t.name}</span>
       </label>`).join('')}catch(e){console.error("Failed to load tools",e)}}
-function applyEditorSettings() {
-  if (!editor) return;
-  const settings = getEditorSettings();
-  editor.updateOptions({
-    fontSize: settings.fontSize,
-  });
-  monaco.editor.setTheme(settings.theme);
-}
-
-function getEditorSettings() {
-  try {
-    const saved = localStorage.getItem('editorSettings');
-    if (saved) {
-      return JSON.parse(saved);
-    }
-  } catch (e) {}
-  return { theme: 'vs-dark', fontSize: 14 };
-}
-
-function saveEditorSettings() {
-  const settings = {
-    theme: $('#editor-theme').value,
-    fontSize: parseInt($('#editor-font-size').value, 10),
-  };
-  localStorage.setItem('editorSettings', JSON.stringify(settings));
-  return settings;
-}
-
 function initEditor() {
   if (editor) return; // Already initialized
   require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' }});
-  const settings = getEditorSettings();
-  $('#editor-theme').value = settings.theme;
-  $('#editor-font-size').value = settings.fontSize;
-
   require(['vs/editor/editor.main'], () => {
     editor = monaco.editor.create($('#editor-container'), {
-      theme: settings.theme,
-      fontSize: settings.fontSize
+      theme: 'vs-dark'
     });
     editor.onDidChangeModelContent(() => {
       if (activeFile && openFiles.has(activeFile)) {
@@ -408,69 +113,20 @@ function initEditor() {
           file.dirty = true;
           renderTabs();
         }
+        // Debounced linting
+        clearTimeout(lintTimeout);
+        lintTimeout = setTimeout(() => {
+            const content = file.model.getValue();
+            lintFile(activeFile, content);
+        }, 500);
       }
     });
   });
 }
+
 function setupTabs(){ const tabs=$$('.tab'); const sections=$$('section'); tabs.forEach(tab=>{ tab.onclick=()=>{ tabs.forEach(t=>t.classList.remove('active')); sections.forEach(s=>s.classList.add('hidden')); tab.classList.add('active'); const target=tab.id.replace('tab-',''); $(`#${target}`).classList.remove('hidden'); if(target==='work')refreshTree(); if(target==='editor')initEditor(); if(target==='terminal')initTerminal(); if(target==='graph'&&graph)graph.fitView(); if(target==='playground')loadTools()}})}
-document.addEventListener('DOMContentLoaded',()=>{ initGraph(); setupTabs(); setupContextMenu(); $('#thinkmin').onclick=()=>{if(think.minimized)expandThinkDock();else collapseThinkDock()}; $('#thinkclose').onclick=()=>{closeThinkDock()}; $('#add').onclick=()=>{ const n=$('#aname').value.trim(); if(!n)return; const sanitizedName=n.replace(/[^a-zA-Z0-9_]/g,'_'); agents.push({name:sanitizedName,system:$('#asys').value.trim(),temperature:parseFloat($('#atemp').value)||0.3}); $('#aname').value=''; $('#asys').value=''; renderTeam(); saveSession()}; $('#generate-agents').onclick=async()=>{ const scenario=$('#scenario').value.trim(); if(!scenario){toast('Please enter a scenario description.');return} const btn=$('#generate-agents'); btn.disabled=true; btn.textContent='Generating...'; try{ const r=await fetch('/api/scenario/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenario,model:$('#model').value,num_agents:$('#num-agents').value})}); if(!r.ok){ const err=await r.json().catch(()=>({error:'Request failed'})); throw new Error(err.error)} const data=await r.json(); agents=data.agents; $('#goal').value=data.goal || ''; renderTeam(); toast('Agents and goal generated successfully.')}catch(e){toast('Failed to generate agents: '+e.message)}finally{ btn.disabled=false; btn.textContent='Create Agents from Scenario'}}; $('#fbform').onsubmit=async e=>{ e.preventDefault(); const v=$('#fb').value.trim(); if(!v)return; addMsg('You',v,true); await fetch('/user_input',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:v})}); $('#fb').value=''; setStatus('running')}; $('#upload').onclick=async()=>{ const f=$('#file').files[0]; if(!f)return; const fd=new FormData(); fd.append('file',f); const r=await fetch('/api/workspace/upload',{method:'POST',body:fd}); if(!r.ok){ const e=await r.json(); toast('Upload failed: '+(e.error||e.message))}else{ toast('Uploaded'); refreshTree()}}; $('#refresh').onclick=()=>{refreshTree()};
-$('#new-folder-ws').onclick=async()=>{ const path=prompt('Enter the new folder name (e.g., my_new_folder or nested/folder):'); if(path){ try{ const r=await fetch('/api/workspace/new_folder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})}); if(!r.ok){ const err=await r.json().catch(()=>({error:'Request failed'})); throw new Error(err.message||err.error)} toast(`Created folder ${path}`); refreshTree()}catch(err){toast(`Error creating folder: ${err.message}`)}}};
-let searchTimeout;
-$('#search-query').addEventListener('input', () => {
-    clearTimeout(searchTimeout);
-    searchTimeout = setTimeout(async () => {
-        const query = $('#search-query').value;
-        if (query.length < 2) {
-            $('#search-results').innerHTML = '';
-            return;
-        }
-        const r = await fetch(`/api/workspace/search?query=${encodeURIComponent(query)}`);
-        const results = await r.json();
-        const resultsEl = $('#search-results');
-        resultsEl.innerHTML = '';
-        if (results.length === 0) {
-            resultsEl.innerHTML = '<div style="color: var(--muted); padding: 8px;">No results found.</div>';
-            return;
-        }
-        results.forEach(res => {
-            const resultEl = document.createElement('div');
-            resultEl.className = 'search-result';
-            resultEl.style.cssText = 'padding: 6px; cursor: pointer; border-radius: 4px; margin-bottom: 4px;';
-            resultEl.innerHTML = `<strong style="color: var(--blue);">${res.path}</strong>:<span style="color: var(--amber);">${res.line_number}</span> <div style="color: var(--muted); white-space: pre-wrap; background: #2b3443; padding: 4px; border-radius: 4px;">${res.line_content}</div>`;
-            resultEl.onclick = () => {
-                 const node = $(`div.node[data-path="${res.path}"]`);
-                 if(node) {
-                    node.click();
-                    setTimeout(() => {
-                        if(editor) {
-                            editor.revealLineInCenter(res.line_number);
-                            editor.setPosition({ lineNumber: res.line_number, column: 1 });
-                            editor.focus();
-                        }
-                    }, 200);
-                 }
-            };
-            resultsEl.appendChild(resultEl);
-        });
-        $$('.search-result').forEach(el => {
-            el.addEventListener('mouseover', () => el.style.backgroundColor = 'var(--chip)');
-            el.addEventListener('mouseout', () => el.style.backgroundColor = 'transparent');
-        });
-    }, 300);
-});
-$('#editor-theme').addEventListener('change', () => {
-  saveEditorSettings();
-  applyEditorSettings();
-});
-$('#editor-font-size').addEventListener('change', () => {
-  saveEditorSettings();
-  applyEditorSettings();
-});
-$('#format-code').onclick = () => {
-    if (editor) {
-      editor.getAction('editor.action.formatDocument').run();
-    }
-  };
+document.addEventListener('DOMContentLoaded',()=>{ initGraph(); setupTabs(); $('#thinkmin').onclick=()=>{if(think.minimized)expandThinkDock();else collapseThinkDock()}; $('#thinkclose').onclick=()=>{closeThinkDock()}; $('#add').onclick=()=>{ const n=$('#aname').value.trim(); if(!n)return; const sanitizedName=n.replace(/[^a-zA-Z0-9_]/g,'_'); agents.push({name:sanitizedName,system:$('#asys').value.trim(),temperature:parseFloat($('#atemp').value)||0.3}); $('#aname').value=''; $('#asys').value=''; renderTeam(); saveSession()}; $('#generate-agents').onclick=async()=>{ const scenario=$('#scenario').value.trim(); if(!scenario){toast('Please enter a scenario description.');return} const btn=$('#generate-agents'); btn.disabled=true; btn.textContent='Generating...'; try{ const r=await fetch('/api/scenario/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenario,model:$('#model').value,num_agents:$('#num-agents').value})}); if(!r.ok){ const err=await r.json().catch(()=>({error:'Request failed'})); throw new Error(err.error)} const data=await r.json(); agents=data.agents; $('#goal').value=data.goal || ''; renderTeam(); toast('Agents and goal generated successfully.')}catch(e){toast('Failed to generate agents: '+e.message)}finally{ btn.disabled=false; btn.textContent='Create Agents from Scenario'}}; $('#fbform').onsubmit=async e=>{ e.preventDefault(); const v=$('#fb').value.trim(); if(!v)return; addMsg('You',v,true); await fetch('/user_input',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:v})}); $('#fb').value=''; setStatus('running')}; $('#upload').onclick=async()=>{ const f=$('#file').files[0]; if(!f)return; const fd=new FormData(); fd.append('file',f); const r=await fetch('/api/workspace/upload',{method:'POST',body:fd}); if(!r.ok){ const e=await r.json(); toast('Upload failed: '+(e.error||e.message))}else{ toast('Uploaded'); refreshTree()}}; $('#refresh').onclick=()=>{refreshTree()}; $('#new-folder').onclick=async()=>{ const path=prompt('Enter the new folder name (e.g., my_new_folder or nested/folder):'); if(path){ try{ const r=await fetch('/api/workspace/new_folder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})}); if(!r.ok){ const err=await r.json().catch(()=>({error:'Request failed'})); throw new Error(err.message||err.error)} toast(`Created folder ${path}`); refreshTree()}catch(err){toast(`Error creating folder: ${err.message}`)}}};
+
 $('#new-file').onclick = () => {
     if (!editor) {
       initEditor();
@@ -488,45 +144,6 @@ $('#new-file').onclick = () => {
       toast(`New file '${path}' created locally. Save to persist.`);
     }
   };
-$('#run-file').onclick = () => {
-    if (!activeFile) {
-      toast('No file is active to run.');
-      return;
-    }
-
-    const getCommand = (path) => {
-      const ext = path.split('.').pop();
-      switch (ext) {
-        case 'py': return `python ${path}\n`;
-        case 'js': return `node ${path}\n`;
-        case 'sh': return `bash ${path}\n`;
-        default:
-          toast(`Don't know how to run '.${ext}' files.`);
-          return null;
-      }
-    };
-
-    const command = getCommand(activeFile);
-    if (command) {
-      // Switch to terminal
-      $('#tab-terminal').click();
-
-      // Send command to terminal websocket
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(command);
-      } else {
-        // Wait a moment for terminal to connect
-        setTimeout(() => {
-          if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(command);
-          } else {
-            toast('Terminal is not connected.');
-          }
-        }, 500);
-      }
-    }
-  };
-
 $('#save-file').onclick = async () => {
     if (!activeFile) {
       toast('No file is active in the editor.');
@@ -554,11 +171,255 @@ $('#save-file').onclick = async () => {
         refreshTree();
       }
       renderTabs();
+      lintFile(activeFile, content);
     } catch (err) {
       toast(`Error saving file: ${err.message}`);
     }
   };
- const sessionsModal=$('#sessions-modal'); const sessionsList=$('#sessions-list'); async function renderSessions(){ const r=await fetch('/api/sessions'); const files=await r.json(); sessionsList.innerHTML=files.map(f=>`
+// Resizable problems panel
+let lintTimeout;
+let isResizing = false;
+const problemsPanel = $('#problems-panel');
+const problemsHeader = $('#problems-header');
+const editorContainer = $('#editor-container');
+
+problemsHeader.addEventListener('mousedown', (e) => {
+    isResizing = true;
+    let startY = e.pageY;
+    let startHeight = problemsPanel.offsetHeight;
+
+    function onMouseMove(e) {
+        if (!isResizing) return;
+        const newHeight = startHeight - (e.pageY - startY);
+        if (newHeight > 30 && newHeight < (window.innerHeight - 200)) {
+            problemsPanel.style.height = `${newHeight}px`;
+            if (editor) editor.layout();
+        }
+    }
+
+    function onMouseUp() {
+        isResizing = false;
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+    }
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+});
+
+function getLanguageForPath(path) {
+  const extension = '.' + path.split('.').pop();
+  const mapping = {
+    '.py': 'python',
+    '.js': 'javascript',
+    '.html': 'html',
+    '.css': 'css',
+    '.json': 'json',
+    '.md': 'markdown',
+    '.ts': 'typescript',
+    '.java': 'java',
+    '.go': 'go',
+    '.sh': 'shell',
+    '.yml': 'yaml',
+    '.yaml': 'yaml',
+    '.xml': 'xml',
+    '.php': 'php',
+    '.rb': 'ruby',
+    '.rs': 'rust',
+    '.sql': 'sql',
+    '.txt': 'plaintext',
+  };
+  return mapping[extension] || 'plaintext';
+}
+
+function renderTabs() {
+  const tabsContainer = $('#editor-tabs');
+  tabsContainer.innerHTML = '';
+  for (const [path, file] of openFiles.entries()) {
+    const tab = document.createElement('div');
+    tab.className = 'editor-tab';
+    if (path === activeFile) {
+      tab.classList.add('active');
+    }
+    tab.dataset.path = path;
+
+    const fileName = path.split('/').pop();
+    const dirtyIndicator = file.dirty ? ' *' : '';
+    tab.innerHTML = `
+      <span>${fileName}${dirtyIndicator}</span>
+      <button class="close-tab" data-path="${path}">×</button>
+    `;
+
+    tabsContainer.appendChild(tab);
+  }
+
+  $$('.editor-tab').forEach(tab => {
+    tab.addEventListener('click', (e) => {
+      if (e.target.classList.contains('close-tab')) {
+        closeFile(e.target.dataset.path);
+      } else {
+        switchToFile(tab.dataset.path);
+      }
+    });
+  });
+}
+
+function switchToFile(path) {
+  if (!openFiles.has(path)) return;
+
+  if (activeFile && openFiles.has(activeFile)) {
+    openFiles.get(activeFile).state = editor.saveViewState();
+  }
+
+  activeFile = path;
+  const file = openFiles.get(path);
+  editor.setModel(file.model);
+  if (file.state) {
+    editor.restoreViewState(file.state);
+  }
+  editor.focus();
+  renderTabs();
+}
+
+function closeFile(path) {
+  if (!openFiles.has(path)) return;
+
+  const file = openFiles.get(path);
+  if (file.dirty) {
+    if (!confirm(`File ${path} has unsaved changes. Are you sure you want to close it?`)) {
+      return;
+    }
+  }
+
+  file.model.dispose();
+  openFiles.delete(path);
+
+  if (activeFile === path) {
+    activeFile = null;
+    const nextFile = openFiles.keys().next().value;
+    if (nextFile) {
+      switchToFile(nextFile);
+    } else {
+      editor.setModel(null);
+      $('#editor-tabs').innerHTML = '';
+    }
+  }
+
+  renderTabs();
+}
+
+async function onTreeClick(e) {
+  const node = e.target.closest('.node');
+  if (!node) return;
+
+  const path = node.dataset.path;
+  const type = node.dataset.type;
+
+  if (type === 'file') {
+      if (openFiles.has(path)) {
+        switchToFile(path);
+        return;
+      }
+
+      try {
+        const r = await fetch(`/api/workspace/file?path=${encodeURIComponent(path)}`);
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({ error: 'Request failed' }));
+          throw new Error(err.message || err.error);
+        }
+        const content = await r.text();
+        const language = getLanguageForPath(path);
+
+        $('#tab-editor').click();
+
+        const model = monaco.editor.createModel(content, language);
+        openFiles.set(path, { model, state: null });
+
+        if (!editor) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+
+        switchToFile(path);
+        lintFile(path, content);
+
+      } catch (err) {
+        toast(`Error opening file: ${err.message}`);
+      }
+    }
+}
+
+function displayProblems(path, problems) {
+    const file = openFiles.get(path);
+    if (!file || !editor) return;
+
+    const markers = problems.map(p => ({
+        message: `[${p.code}] ${p.message}`,
+        severity: monaco.MarkerSeverity.Error,
+        startLineNumber: p.line,
+        startColumn: p.column,
+        endLineNumber: p.line,
+        endColumn: 100
+    }));
+
+    monaco.editor.setModelMarkers(file.model, 'lint', markers);
+
+    const problemsList = $('#problems-list');
+    problemsList.innerHTML = '';
+    if (problems.length === 0) {
+        $('#problems-panel').style.height = '0';
+        return;
+    }
+
+    if (problemsPanel.offsetHeight < 30) {
+        problemsPanel.style.height = '150px';
+    }
+
+
+    problems.forEach(p => {
+        const item = document.createElement('div');
+        item.className = 'problem-item';
+        item.innerHTML = `
+            <span class="code">${p.code}</span>
+            <span>${p.message}</span>
+            <span class="location"> at line ${p.line}, column ${p.column}</span>
+        `;
+        item.onclick = () => {
+            switchToFile(path);
+            editor.revealLineInCenter(p.line);
+            editor.setPosition({ lineNumber: p.line, column: p.column });
+            editor.focus();
+        };
+        problemsList.appendChild(item);
+    });
+}
+
+async function lintFile(path, content) {
+  if (!path.endsWith('.py')) {
+    if (editor && openFiles.has(path)) {
+        monaco.editor.setModelMarkers(openFiles.get(path).model, 'lint', []);
+    }
+    displayProblems(path, []);
+    return;
+  }
+
+  try {
+    const r = await fetch('/api/workspace/lint', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, content })
+    });
+    if (!r.ok) {
+      console.error('Linting request failed');
+      return;
+    }
+    const problems = await r.json();
+    displayProblems(path, problems);
+  } catch (err) {
+    console.error(`Error during linting: ${err.message}`);
+  }
+}
+
+const sessionsModal=$('#sessions-modal'); const sessionsList=$('#sessions-list'); async function renderSessions(){ const r=await fetch('/api/sessions'); const files=await r.json(); sessionsList.innerHTML=files.map(f=>`
       <div style="display:flex; justify-content:space-between; align-items:center; padding:5px; border-bottom:1px solid var(--border);">
         <span>${f}</span>
         <div>

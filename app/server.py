@@ -11,6 +11,7 @@ import asyncio
 import fcntl
 import struct
 import termios
+import tempfile
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -32,11 +33,10 @@ from .scenario import generate_agents_from_scenario
 from app.state import state
 from app.tools import TOOLS
 from app.utils import tree_listing
-import glob
 from autogen_agentchat.agents import AssistantAgent, UserProxyAgent
 from autogen_agentchat.messages import TextMessage
 from autogen_agentchat.teams import SelectorGroupChat
-from autogen_core.models import ChatCompletionClient
+from autogen_ext.models.ollama import OllamaChatCompletionClient
 
 # To handle templates and static files correctly when run from main.py
 app_dir = os.path.dirname(os.path.abspath(__file__))
@@ -193,7 +193,7 @@ async def api_agent_run():
 
     try:
         # 1. Create model client
-        ollama_client = ChatCompletionClient(model=model, host=OLLAMA_BASE_URL)
+        ollama_client = OllamaChatCompletionClient(model=model, host=OLLAMA_BASE_URL)
 
         # 2. Filter the tools based on the user's selection
         selected_tool_names = agent_config.get("tools", [])
@@ -379,36 +379,61 @@ async def api_rename_file():
     except OSError as e:
         return jsonify({"error": "os_error", "message": str(e)}), 500
 
-@app.get("/api/workspace/search")
-async def api_search_files():
-    query = request.args.get("query")
-    if not query:
-        return jsonify({"error": "missing_query"}), 400
+@app.post("/api/workspace/lint")
+async def api_lint_file():
+    data = await request.get_json()
+    path = data.get("path")
+    content = data.get("content")
 
-    base_path = os.path.abspath(WORKSPACE_DIR)
-    results = []
+    if not path or content is None:
+        return jsonify({"error": "missing_path_or_content"}), 400
 
-    # Using glob to recursively find all files
-    all_files = glob.glob(os.path.join(base_path, "**/*"), recursive=True)
+    # For now, only lint Python files
+    if not path.endswith(".py"):
+        return jsonify([])
 
-    for file_path in all_files:
-        if os.path.isfile(file_path):
-            try:
-                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                    for i, line in enumerate(f):
-                        if query in line:
-                            # Return path relative to workspace dir
-                            relative_path = os.path.relpath(file_path, base_path)
-                            results.append({
-                                "path": relative_path,
-                                "line_number": i + 1,
-                                "line_content": line.strip()
-                            })
-            except Exception as e:
-                # Could be a binary file or other issue, just skip it
-                log.warn(f"Could not search file {file_path}: {e}")
+    # Use a temporary file to run flake8
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as temp_file:
+        temp_file.write(content)
+        temp_file_path = temp_file.name
 
-    return jsonify(results)
+    problems = []
+    try:
+        # Run flake8 and capture output
+        process = await asyncio.create_subprocess_exec(
+            "flake8",
+            "--format=%(row)d,%(col)d,%(code)s,%(text)s",
+            temp_file_path,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+
+        if stderr:
+            log.error("linting_stderr", error=stderr.decode())
+
+        output = stdout.decode("utf-8").strip()
+        if output:
+            for line in output.splitlines():
+                try:
+                    parts = line.split(',', 3)
+                    if len(parts) == 4:
+                        problems.append({
+                            "line": int(parts[0]),
+                            "column": int(parts[1]),
+                            "code": parts[2],
+                            "message": parts[3],
+                        })
+                except (ValueError, IndexError) as e:
+                    log.error("linting_parse_error", line=line, error=str(e))
+
+    except Exception as e:
+        log.error("linting_process_error", error=str(e))
+    finally:
+        # Clean up the temporary file
+        os.remove(temp_file_path)
+
+    return jsonify(problems)
 
 @app.get("/api/sessions")
 def sessions_list():
