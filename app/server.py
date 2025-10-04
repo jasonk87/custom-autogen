@@ -11,7 +11,6 @@ import asyncio
 import fcntl
 import struct
 import termios
-import tempfile
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -378,62 +377,6 @@ async def api_rename_file():
         return jsonify({"error": "not_found"}), 404
     except OSError as e:
         return jsonify({"error": "os_error", "message": str(e)}), 500
-
-@app.post("/api/workspace/lint")
-async def api_lint_file():
-    data = await request.get_json()
-    path = data.get("path")
-    content = data.get("content")
-
-    if not path or content is None:
-        return jsonify({"error": "missing_path_or_content"}), 400
-
-    # For now, only lint Python files
-    if not path.endswith(".py"):
-        return jsonify([])
-
-    # Use a temporary file to run flake8
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as temp_file:
-        temp_file.write(content)
-        temp_file_path = temp_file.name
-
-    problems = []
-    try:
-        # Run flake8 and capture output
-        process = await asyncio.create_subprocess_exec(
-            "flake8",
-            "--format=%(row)d,%(col)d,%(code)s,%(text)s",
-            temp_file_path,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        stdout, stderr = await process.communicate()
-
-        if stderr:
-            log.error("linting_stderr", error=stderr.decode())
-
-        output = stdout.decode("utf-8").strip()
-        if output:
-            for line in output.splitlines():
-                try:
-                    parts = line.split(',', 3)
-                    if len(parts) == 4:
-                        problems.append({
-                            "line": int(parts[0]),
-                            "column": int(parts[1]),
-                            "code": parts[2],
-                            "message": parts[3],
-                        })
-                except (ValueError, IndexError) as e:
-                    log.error("linting_parse_error", line=line, error=str(e))
-
-    except Exception as e:
-        log.error("linting_process_error", error=str(e))
-    finally:
-        # Clean up the temporary file
-        os.remove(temp_file_path)
-
-    return jsonify(problems)
 
 @app.get("/api/sessions")
 def sessions_list():
