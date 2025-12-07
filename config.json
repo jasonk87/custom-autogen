@@ -10,9 +10,9 @@
     "application/octet-stream"
   ],
   "max_upload_bytes": 10485760,
-  "default_model": "gemini-1.5-flash",
+  "default_model": "gemini-2.0-flash",
   "collab_guidance": "Collaborate with the team. Do not try to solve the entire task alone. Never emit TERMINATE. Suggest explicit next-role handoffs. Keep outputs concise.",
-  "gemini_api_key": "",
+  "gemini_api_key": "AIzaSyCnERyshzrZbyuQ9KbGBZTEWA4jC37cJz8",
   "models_ttl_sec": 20.0,
   "httpx_timeout": {
     "connect": 30.0,

@@ -17,7 +17,7 @@ def _create_graph_payload(message: Any, groupchat: SelectorGroupChat) -> Optiona
     """Creates a payload for the frontend, including graph data if applicable."""
     payload = None
     if isinstance(message, ModelClientStreamingChunkEvent):
-        payload = {"type": "token", "id": "stream", "delta": message.delta, "sender": message.source}
+        payload = {"type": "token", "id": "stream", "delta": message.content, "sender": message.source}
     elif isinstance(message, SelectSpeakerEvent):
         payload = {
             "type": "chat",
@@ -53,8 +53,12 @@ async def stream_to_queue(stream, out_q, groupchat):
             out_q.put(json.dumps(payload))
 
 class MyUserProxyAgent(UserProxyAgent):
+    def __init__(self, name: str, out_q: "queue.Queue[str]"):
+        super().__init__(name=name)
+        self.out_q = out_q
+
     def get_human_input(self, prompt: str) -> str:
-        out_q.put(json.dumps({"type": "status", "state": "waiting_for_input"}))
+        self.out_q.put(json.dumps({"type": "status", "state": "waiting_for_input"}))
         while True:
             try:
                 return state.user_input_q.get(timeout=0.1)
@@ -77,10 +81,7 @@ async def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any
         # 2. Create agents
         user_proxy = MyUserProxyAgent(
             name="Human_Admin",
-            human_input_mode="ALWAYS" if human_proxy else "NEVER",
-            max_consecutive_auto_reply=10 if not human_proxy else None,
-            code_execution_config={"work_dir": "autogen_work_dir", "use_docker": False},
-            system_message="You are the human admin. You can execute code and provide feedback.",
+            out_q=out_q,
         )
 
         agents = [user_proxy]
@@ -90,7 +91,7 @@ async def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any
                 model_client=gemini_client,
                 system_message=agent_cfg.get("system", "You are a helpful assistant."),
                 model_client_stream=True,
-                reflect_on_tool_use=True,
+                reflect_on_tool_use=False,
                 tools=list(TOOLS.values()),
             )
             agents.append(agent)
@@ -117,13 +118,14 @@ async def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any
             participants=agents,
             max_turns=max_turns,
             selector_func=selector_func,
+            model_client=gemini_client,
         )
 
         # 5. Start the chat
         messages = [TextMessage(content=goal, source="user")]
 
         for i in range(max_turns):
-            chat_stream = await groupchat.run_stream(
+            chat_stream = groupchat.run_stream(
                 task=messages,
             )
 

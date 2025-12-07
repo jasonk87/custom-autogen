@@ -3,6 +3,7 @@ from typing import Any, Dict, List
 from pydantic import BaseModel, Field
 from autogen_ext.models.openai import OpenAIChatCompletionClient
 from autogen_agentchat.messages import TextMessage
+from autogen_core.models import SystemMessage, UserMessage, ModelFamily
 
 from app.config import GEMINI_API_KEY, DEFAULT_MODEL
 
@@ -34,7 +35,9 @@ Your task is to generate a list of {num_agents} agents that would be suitable fo
 "{scenario}"
 
 The agents should have diverse roles and capabilities to effectively collaborate on the scenario.
-Please generate a JSON object that conforms to the provided schema.
+The agents should have diverse roles and capabilities to effectively collaborate on the scenario.
+Please generate a JSON object that conforms to the following schema:
+{AgentList.model_json_schema()}
 """
 
     # We need to manually enforce JSON output since OpenAIChatCompletionClient might not support `format='json'` directly in the same way as Ollama client or it might differ.
@@ -48,8 +51,7 @@ Please generate a JSON object that conforms to the provided schema.
     # Wait, `client.create` returns a `CreateResult`.
 
     response = await client.create(
-        messages=[TextMessage(content=prompt, source="user")],
-        response_format={"type": "json_object"}
+        messages=[UserMessage(content=prompt, source="user")]
     )
 
     response_text = response.content
@@ -86,8 +88,7 @@ Please only output the goal as a single string.
 """
 
     goal_response = await client.create(
-        messages=[TextMessage(content=goal_prompt, source="user")],
-        temperature=0.5
+        messages=[UserMessage(content=goal_prompt, source="user")]
     )
     suggested_goal = goal_response.content.strip()
 

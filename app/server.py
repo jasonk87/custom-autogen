@@ -1,17 +1,25 @@
 import base64
-import base64
 import io
 import json
 import os
 import queue
 import subprocess
 import time
-import pty
 import asyncio
-import fcntl
 import struct
-import termios
 from typing import Any, Dict, List, Optional, Tuple
+
+# WINDOWS FIX: Only load these on Linux/Mac
+try:
+    import pty
+    import fcntl
+    import termios
+except ImportError:
+    # On Windows, these don't exist, so we set them to None to prevent crashing.
+    # Note: The "Terminal" tab in the app will not work on Windows.
+    pty = None
+    fcntl = None
+    termios = None
 
 import httpx
 from quart import Quart, Response, jsonify, request, send_from_directory, render_template, websocket
@@ -128,7 +136,7 @@ async def scenario_generate():
         agents, suggested_goal = await generate_agents_from_scenario(scenario, model, num_agents)
         return jsonify({"agents": agents, "goal": suggested_goal})
     except Exception as e:
-        log.error("failed_to_generate_agents", error=e)
+        log.error("failed_to_generate_agents", exc_info=e)
         return jsonify({"error": str(e)}), 500
 
 @app.post("/choose_next")
@@ -148,7 +156,7 @@ def set_ollama():
 @app.get("/api/models")
 def api_models():
     # Hardcoded list of Gemini models
-    return jsonify(["gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.0-pro"])
+    return jsonify(["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.0-pro"])
 
 @app.get("/api/tools")
 def api_tools():
@@ -243,8 +251,8 @@ def api_upload():
     return jsonify({"ok": True, "file": fn, "bytes": size})
 
 @app.get("/workspace/<path:fn>")
-def ws_file(fn: str):
-    return send_from_directory(WORKSPACE_DIR, fn)
+async def ws_file(fn: str):
+    return await send_from_directory(WORKSPACE_DIR, fn)
 
 @app.delete("/api/workspace/delete")
 async def api_delete_file():
