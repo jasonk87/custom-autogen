@@ -25,9 +25,9 @@ from app.config import (
     MODELS_TTL_SEC,
     SESSIONS_DIR,
     WORKSPACE_DIR,
+    GEMINI_API_KEY,
 )
 from app.core import run_orchestrator
-from app.ollama import _http, get_ollama_endpoints, set_ollama_host, OLLAMA_BASE_URL
 from .scenario import generate_agents_from_scenario
 from app.state import state
 from app.tools import TOOLS
@@ -35,7 +35,7 @@ from app.utils import tree_listing
 from autogen_agentchat.agents import AssistantAgent, UserProxyAgent
 from autogen_agentchat.messages import TextMessage
 from autogen_agentchat.teams import SelectorGroupChat
-from autogen_ext.models.ollama import OllamaChatCompletionClient
+from autogen_ext.models.openai import OpenAIChatCompletionClient
 
 # To handle templates and static files correctly when run from main.py
 app_dir = os.path.dirname(os.path.abspath(__file__))
@@ -142,32 +142,13 @@ def choose_next():
 
 @app.post("/api/settings/ollama")
 def set_ollama():
-    data = request.json or {}
-    url = (data.get("base") or "").strip()
-    if not url:
-        return jsonify({"error": "missing_base"}), 400
-    set_ollama_host(url)
-    return jsonify({"ok": True, "base": url})
+    # Deprecated/Removed for Gemini switch, but keeping a stub to avoid frontend breaking if it calls it
+    return jsonify({"ok": True, "message": "Ollama support has been replaced with Gemini."})
 
 @app.get("/api/models")
 def api_models():
-    global _models_cache
-    now = time.time()
-    if now - _models_cache["ts"] < MODELS_TTL_SEC and _models_cache["names"]:
-        return jsonify(_models_cache["names"])
-    tags_url, _ = get_ollama_endpoints()
-    try:
-        r = _http.get(tags_url)
-        r.raise_for_status()
-        payload = r.json() or {}
-        models = payload.get("models", [])
-        names = [m.get("name") for m in models if isinstance(m, dict) and m.get("name")]
-        _models_cache = {"ts": now, "names": names}
-        return jsonify(names)
-    except httpx.HTTPError as e:
-        return jsonify({"error": "connect_failed", "message": str(e)}), 503
-    except ValueError as e:
-        return jsonify({"error": "bad_json", "message": str(e)}), 502
+    # Hardcoded list of Gemini models
+    return jsonify(["gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.0-pro"])
 
 @app.get("/api/tools")
 def api_tools():
@@ -192,7 +173,11 @@ async def api_agent_run():
 
     try:
         # 1. Create model client
-        ollama_client = OllamaChatCompletionClient(model=model, host=OLLAMA_BASE_URL)
+        gemini_client = OpenAIChatCompletionClient(
+            model=model,
+            api_key=GEMINI_API_KEY,
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+        )
 
         # 2. Filter the tools based on the user's selection
         selected_tool_names = agent_config.get("tools", [])
@@ -201,7 +186,7 @@ async def api_agent_run():
         # 3. Create the agent
         agent = AssistantAgent(
             name=agent_config.get("name", "playground_agent"),
-            model_client=ollama_client,
+            model_client=gemini_client,
             system_message=agent_config.get("system_message", "You are a helpful assistant."),
             tools=selected_tools,
         )
@@ -210,7 +195,7 @@ async def api_agent_run():
         user_proxy = UserProxyAgent(name="user_proxy")
 
         # 5. Use a simple group chat of two agents to run the conversation
-        team = SelectorGroupChat(participants=[user_proxy, agent], max_turns=5, model_client=ollama_client)
+        team = SelectorGroupChat(participants=[user_proxy, agent], max_turns=5, model_client=gemini_client)
 
         # This can be run directly since we are in an async route.
         final = None

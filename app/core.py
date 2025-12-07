@@ -7,9 +7,9 @@ from typing import Any, Dict, List, Optional, Sequence
 from autogen_agentchat.agents import AssistantAgent, UserProxyAgent
 from autogen_agentchat.messages import ModelClientStreamingChunkEvent, TextMessage, BaseChatMessage, BaseAgentEvent, SelectSpeakerEvent
 from autogen_agentchat.teams import SelectorGroupChat
-from autogen_ext.models.ollama import OllamaChatCompletionClient
+from autogen_ext.models.openai import OpenAIChatCompletionClient
 
-from app.config import OLLAMA_BASE_URL, DEFAULT_MODEL
+from app.config import GEMINI_API_KEY, DEFAULT_MODEL
 from app.state import state
 from app.tools import TOOLS
 
@@ -66,9 +66,11 @@ class MyUserProxyAgent(UserProxyAgent):
 async def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any]], manager_mode: str, out_q: "queue.Queue[str]", max_turns: int = 60, human_proxy: bool = False, temperature: float = 0.3):
     try:
         # 1. Create model client
-        ollama_client = OllamaChatCompletionClient(
-            model=model or DEFAULT_MODEL,
-            host=OLLAMA_BASE_URL,
+        model_name = model or DEFAULT_MODEL
+        gemini_client = OpenAIChatCompletionClient(
+            model=model_name,
+            api_key=GEMINI_API_KEY,
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
             temperature=temperature,
         )
 
@@ -85,7 +87,7 @@ async def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any
         for agent_cfg in agents_cfg:
             agent = AssistantAgent(
                 name=agent_cfg["name"],
-                model_client=ollama_client,
+                model_client=gemini_client,
                 system_message=agent_cfg.get("system", "You are a helpful assistant."),
                 model_client_stream=True,
                 reflect_on_tool_use=True,

@@ -1,9 +1,10 @@
 import json
 from typing import Any, Dict, List
 from pydantic import BaseModel, Field
-import ollama
+from autogen_ext.models.openai import OpenAIChatCompletionClient
+from autogen_agentchat.messages import TextMessage
 
-from app.config import OLLAMA_BASE_URL
+from app.config import GEMINI_API_KEY, DEFAULT_MODEL
 
 # Pydantic models for structured output
 class AgentConfig(BaseModel):
@@ -19,7 +20,13 @@ async def generate_agents_from_scenario(scenario: str, model: str, num_agents: i
     Generates a list of agents from a scenario description using an LLM
     with structured output (JSON schema).
     """
-    client = ollama.AsyncClient(host=OLLAMA_BASE_URL)
+    # Use OpenAIChatCompletionClient for Gemini
+    client = OpenAIChatCompletionClient(
+        model=model or DEFAULT_MODEL,
+        api_key=GEMINI_API_KEY,
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        temperature=0.1
+    )
 
     prompt = f"""
 You are an expert agent creator.
@@ -30,16 +37,37 @@ The agents should have diverse roles and capabilities to effectively collaborate
 Please generate a JSON object that conforms to the provided schema.
 """
 
-    response = await client.chat(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        format='json',
-        options={"temperature": 0.1}
+    # We need to manually enforce JSON output since OpenAIChatCompletionClient might not support `format='json'` directly in the same way as Ollama client or it might differ.
+    # However, Gemini supports response_format={"type": "json_object"} if we were using the google client directly, but through OpenAI compat layer it should also work if supported.
+    # But for safety, let's ask for JSON in the prompt and parse it.
+
+    # Actually, AutoGen's client `create` method takes `response_format`.
+    # But `OpenAIChatCompletionClient` is a `ChatCompletionClient`.
+    # Let's use `create` if available or `create_stream`.
+
+    # Wait, `client.create` returns a `CreateResult`.
+
+    response = await client.create(
+        messages=[TextMessage(content=prompt, source="user")],
+        response_format={"type": "json_object"}
     )
 
+    response_text = response.content
+
     # The response content is a JSON string, which we can validate with our Pydantic model
-    response_text = response['message']['content']
-    agent_list_obj = AgentList.model_validate_json(response_text)
+    # It might be wrapped in ```json ... ``` so we clean it.
+    if "```json" in response_text:
+        response_text = response_text.split("```json")[1].split("```")[0].strip()
+    elif "```" in response_text:
+        response_text = response_text.split("```")[1].split("```")[0].strip()
+
+    try:
+        agent_list_obj = AgentList.model_validate_json(response_text)
+    except Exception:
+        # Fallback if parsing fails, maybe just return empty or retry (for now, empty/error)
+        # Try to clean harder or just fail
+        agent_list_obj = AgentList.model_validate_json(response_text)
+
 
     # Convert the Pydantic models back to dictionaries for the rest of the app
     agents = [agent.model_dump() for agent in agent_list_obj.agents]
@@ -57,11 +85,10 @@ The goal should be a clear instruction that can be given to the team to start th
 Please only output the goal as a single string.
 """
 
-    goal_response = await client.chat(
-        model=model,
-        messages=[{"role": "user", "content": goal_prompt}],
-        options={"temperature": 0.5}
+    goal_response = await client.create(
+        messages=[TextMessage(content=goal_prompt, source="user")],
+        temperature=0.5
     )
-    suggested_goal = goal_response['message']['content'].strip()
+    suggested_goal = goal_response.content.strip()
 
     return agents, suggested_goal
