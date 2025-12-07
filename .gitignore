@@ -10,7 +10,7 @@ __pycache__/
 *.log
 
 # Workspace and tool outputs
-autogen_work_dir/
+# autogen_work_dir/
 ollama_install/
 run_and_test.sh
 run_e2e_test.sh

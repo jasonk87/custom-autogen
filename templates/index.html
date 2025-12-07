@@ -1,72 +1,621 @@
 <!doctype html>
 <html lang="en">
+
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Custom Agent Studio — v10</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
   <style>
-    :root{--bg:#0f172a;--panel:#1f2937;--muted:#9ca3af;--text:#e5e7eb;--border:#374151;--chip:#334155;--blue:#2563eb;--blue2:#1d4ed8;--red:#ef4444;--green:#10b981;--amber:#f59e0b}
-    *{box-sizing:border-box} body{margin:0;background:#0b1220;color:var(--text);font:14px/1.4 system-ui,Segoe UI,Inter,Arial}
-    .app{display:flex;height:100vh}
-    .side{width:34%;background:var(--panel);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:18px}
-    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
-    h1{font-size:18px;margin:0}
-    .tabs{display:flex;border-bottom:1px solid var(--border);margin-bottom:10px}
-    .tab{flex:1;padding:10px 8px;border:none;background:transparent;color:#cbd5e1;font-weight:600;cursor:pointer;transition:150ms}
-    .tab.active{background:var(--chip);color:white;border-radius:6px 6px 0 0}
-    .group{margin:8px 0}
-    label{display:block;margin-bottom:4px;color:#cbd5e1;font-size:12px}
-    input,select,textarea{width:100%;background:#111827;color:#e5e7eb;border:1px solid #334155;border-radius:8px;padding:8px}
-    textarea{min-height:70px}
-    .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-    .card{background:#0f172a;border:1px solid var(--border);border-radius:10px;padding:10px}
-    .btn{display:inline-flex;align-items:center;justify-content:center;border:none;border-radius:10px;padding:10px 12px;font-weight:600;color:white;cursor:pointer;transition:150ms}
-    .btn:disabled{opacity:.5;cursor:not-allowed}
-    .btn-primary{background:var(--blue)} .btn-primary:hover{background:var(--blue2)}
-    .btn-danger{background:var(--red)} .btn-success{background:var(--green)} .btn-neutral{background:#374151}
-    .team-item{display:flex;gap:6px;align-items:center;background:#0b1220;border:1px solid #2b3443;border-radius:8px;padding:6px}
-    .team-item .name{font-weight:700} .team-item .sys{flex:1} .team-item .num{width:70px}
-    .main{flex:1;display:flex;flex-direction:column;background:#0b1220;position:relative}
-    #chat{flex:1;overflow:auto;padding:18px}
-    .bubble{max-width:90%;white-space:pre-wrap;border-radius:12px;padding:10px;margin:8px 0;box-shadow:0 4px 10px rgba(0,0,0,.15)}
-    .from-you{background:#1d4ed8;margin-left:auto} .from-them{background:#1f2937}
-    .who{font-size:11px;opacity:.9;margin-bottom:4px}
-    #status{padding:10px;text-align:center;border-top:1px solid var(--border);background:var(--panel)}
-    #fbform{display:flex;gap:8px;border-top:1px solid var(--border);padding:10px;background:var(--panel)}
-    .hidden{display:none}
-    .pill{display:inline-block;background:#0b213f;border:1px solid #23406e;color:#cfe4ff;border-radius:999px;padding:4px 8px;font-size:12px}
-    .row2{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end}
-    .tree ul{list-style:none;padding-left:14px} .tree li{margin:4px 0}
-    .ws-actions{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
-    .ws-upload{display:flex;gap:8px;align-items:center}
-    .ws-buttons{display:flex;gap:8px}
-    .tree .node{display:flex;align-items:center;gap:6px;padding:4px;border-radius:6px;cursor:pointer}
-    .tree .node:hover{background-color:var(--chip)}
-    .tree .node-icon{width:20px;text-align:center}
-    .tree .node-name{flex:1}
-    .tree .node-actions button{visibility:hidden;background:transparent;color:var(--muted);padding:2px 4px}
-    .tree .node:hover .node-actions button{visibility:visible}
-    .tree .node .node-actions button:hover{color:var(--text)}
-    .tree .node-name-input{flex:1;background:#374151;color:var(--text);border:1px solid var(--blue);border-radius:4px;padding:0 2px}
+    :root {
+      --bg: #0f172a;
+      --panel: #1f2937;
+      --muted: #9ca3af;
+      --text: #e5e7eb;
+      --border: #374151;
+      --chip: #334155;
+      --blue: #2563eb;
+      --blue2: #1d4ed8;
+      --red: #ef4444;
+      --green: #10b981;
+      --amber: #f59e0b
+    }
+
+    * {
+      box-sizing: border-box
+    }
+
+    body {
+      margin: 0;
+      background: #0b1220;
+      color: var(--text);
+      font: 14px/1.4 system-ui, Segoe UI, Inter, Arial
+    }
+
+    .app {
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+      /* Prevent body scroll */
+    }
+
+    .side {
+      width: 34%;
+      background: var(--panel);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      transition: width 0.3s ease;
+      /* Smooth transition */
+      flex-shrink: 0;
+    }
+
+    /* Wide Mode (Editor/Terminal Focus) */
+    .app.wide-sidebar .side {
+      width: 300px;
+    }
+
+    .main {
+      display: flex;
+      flex-direction: column;
+      padding: 18px;
+      transition: width 0.3s ease;
+    }
+
+    .app.wide-sidebar .side {
+      width: 75%;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px
+    }
+
+    h1 {
+      font-size: 18px;
+      margin: 0
+    }
+
+    .tabs {
+      display: flex;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 10px
+    }
+
+    .tab {
+      flex: 1;
+      padding: 10px 8px;
+      border: none;
+      background: transparent;
+      color: #cbd5e1;
+      font-weight: 600;
+      cursor: pointer;
+      transition: 150ms
+    }
+
+    .tab.active {
+      background: var(--chip);
+      color: white;
+      border-radius: 6px 6px 0 0
+    }
+
+    .group {
+      margin: 8px 0
+    }
+
+    label {
+      display: block;
+      margin-bottom: 4px;
+      color: #cbd5e1;
+      font-size: 12px
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      background: #111827;
+      color: #e5e7eb;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 8px
+    }
+
+    input:focus,
+    select:focus,
+    textarea:focus {
+      outline: none;
+      border-color: var(--blue)
+    }
+
+    textarea {
+      min-height: 70px
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px
+    }
+
+    .card {
+      background: #0f172a;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: none;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-weight: 600;
+      color: white;
+      cursor: pointer;
+      transition: 150ms
+    }
+
+    .btn:disabled {
+      opacity: .5;
+      cursor: not-allowed
+    }
+
+    .btn-primary {
+      background: var(--blue)
+    }
+
+    .btn-primary:hover {
+      background: var(--blue2)
+    }
+
+    .btn-danger {
+      background: var(--red)
+    }
+
+    .btn-success {
+      background: var(--green)
+    }
+
+    .btn-neutral {
+      background: #374151
+    }
+
+    .team-item {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      background: #0b1220;
+      border: 1px solid #2b3443;
+      border-radius: 8px;
+      padding: 6px
+    }
+
+    .team-item .name {
+      font-weight: 700
+    }
+
+    .team-item .sys {
+      flex: 1
+    }
+
+    .team-item .num {
+      width: 70px
+    }
+
+    .main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: #0b1220;
+      position: relative
+    }
+
+    #chat {
+      flex: 1;
+      overflow: auto;
+      padding: 18px
+    }
+
+    .bubble {
+      max-width: 90%;
+      /* white-space: pre-wrap; Removed to let markdown handle spacing */
+      border-radius: 12px;
+      padding: 10px;
+      margin: 8px 0;
+      box-shadow: 0 4px 10px rgba(0, 0, 0, .15);
+      overflow-wrap: break-word;
+    }
+
+    /* Markdown Styles */
+    .bubble p {
+      margin: 6px 0;
+    }
+
+    .bubble :first-child {
+      margin-top: 0;
+    }
+
+    .bubble :last-child {
+      margin-bottom: 0;
+    }
+
+    .bubble ul,
+    .bubble ol {
+      padding-left: 20px;
+      margin: 6px 0;
+    }
+
+    .bubble code {
+      font-family: monospace;
+      background: rgba(255, 255, 255, 0.1);
+      padding: 2px 4px;
+      border-radius: 4px;
+      color: #e5e7eb;
+    }
+
+    .bubble pre {
+      margin: 8px 0;
+      padding: 0;
+      background: transparent;
+    }
+
+    .bubble pre code {
+      display: block;
+      padding: 12px;
+      background: #0d1117;
+      border-radius: 6px;
+      overflow-x: auto;
+      border: 1px solid #30363d;
+      font-size: 13px;
+    }
+
+    .bubble a {
+      color: #60a5fa;
+    }
+
+    .bubble h1,
+    .bubble h2,
+    .bubble h3 {
+      margin: 10px 0 6px;
+      font-weight: 600;
+      font-size: 1.1em;
+      color: #fff;
+    }
+
+    .from-you {
+      background: #1d4ed8;
+      margin-left: auto
+    }
+
+    .from-them {
+      background: #1f2937
+    }
+
+    .who {
+      font-size: 11px;
+      opacity: .9;
+      margin-bottom: 4px
+    }
+
+    #status {
+      padding: 10px;
+      text-align: center;
+      border-top: 1px solid var(--border);
+      background: var(--panel)
+    }
+
+    #fbform {
+      display: flex;
+      gap: 8px;
+      border-top: 1px solid var(--border);
+      padding: 10px;
+      background: var(--panel)
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    #terminal {
+      display: flex;
+      flex: 1;
+      flex-direction: column;
+      background: #000;
+      padding: 0;
+    }
+
+    .pill {
+      display: inline-block;
+      background: #0b213f;
+      border: 1px solid #23406e;
+      color: #cfe4ff;
+      border-radius: 999px;
+      padding: 4px 8px;
+      font-size: 12px
+    }
+
+    .row2 {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: end
+    }
+
+    .tree ul {
+      list-style: none;
+      padding-left: 14px
+    }
+
+    .tree li {
+      margin: 4px 0
+    }
+
+    .ws-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px
+    }
+
+    .ws-upload {
+      display: flex;
+      gap: 8px;
+      align-items: center
+    }
+
+    .ws-buttons {
+      display: flex;
+      gap: 8px
+    }
+
+    .tree .node {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px;
+      border-radius: 6px;
+      cursor: pointer
+    }
+
+    .tree .node:hover {
+      background-color: var(--chip)
+    }
+
+    .tree .node-icon {
+      width: 20px;
+      text-align: center
+    }
+
+    .tree .node-name {
+      flex: 1
+    }
+
+    .tree .node-actions button {
+      visibility: hidden;
+      background: transparent;
+      color: var(--muted);
+      padding: 2px 4px
+    }
+
+    .tree .node:hover .node-actions button {
+      visibility: visible
+    }
+
+    .tree .node .node-actions button:hover {
+      color: var(--text)
+    }
+
+    .tree .node-name-input {
+      flex: 1;
+      background: #374151;
+      color: var(--text);
+      border: 1px solid var(--blue);
+      border-radius: 4px;
+      padding: 0 2px
+    }
+
+    /* Segmented Control */
+    .segmented-control {
+      display: flex;
+      background: var(--border);
+      padding: 4px;
+      border-radius: 8px;
+      gap: 4px;
+    }
+
+    .segment {
+      flex: 1;
+      background: transparent;
+      border: none;
+      padding: 6px;
+      border-radius: 6px;
+      color: var(--muted);
+      cursor: pointer;
+      font-weight: 600;
+      text-align: center;
+      transition: all 150ms;
+    }
+
+    .segment:hover {
+      color: var(--text);
+    }
+
+    .segment.active {
+      background: var(--panel);
+      color: white;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    }
 
     /* Command Palette */
-    #command-list .command-item { padding: 8px 12px; cursor: pointer; border-radius: 6px; }
-    #command-list .command-item:hover, #command-list .command-item.selected { background-color: var(--chip); }
+    #command-list .command-item {
+      padding: 8px 12px;
+      cursor: pointer;
+      border-radius: 6px;
+    }
+
+    #command-list .command-item:hover,
+    #command-list .command-item.selected {
+      background-color: var(--chip);
+    }
 
     /* Thinking UI */
-    #thinkdock{position:absolute;right:16px;bottom:72px;max-width:420px;width:min(42vw,420px);background:#0b213f;border:1px solid #23406e;border-radius:12px;box-shadow:0 10px 25px rgba(0,0,0,.35);display:none}
-    #thinkhdr{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-bottom:1px solid #1f3a63}
-    #thinkhdr .title{font-weight:700;color:#cfe4ff}
-    #thinkbody{max-height:40vh;overflow:auto;padding:10px;white-space:pre-wrap;color:#e0edff}
-    #thinkhdr .chip{font-size:12px;background:#092245;color:#93c5fd;border:1px solid #1e40af;padding:2px 6px;border-radius:999px}
-    #thinkhdr button{background:#0e1a2b;border:1px solid #2a4066;color:#cfe4ff;border-radius:8px;padding:4px 6px;cursor:pointer}
-    #graph-container{width:100%;height:100%;}
+    #thinkdock {
+      position: absolute;
+      right: 16px;
+      bottom: 72px;
+      max-width: 420px;
+      width: min(42vw, 420px);
+      background: #0b213f;
+      border: 1px solid #23406e;
+      border-radius: 12px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, .35);
+      display: none
+    }
+
+    #thinkhdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 10px;
+      border-bottom: 1px solid #1f3a63
+    }
+
+    #thinkhdr .title {
+      font-weight: 700;
+      color: #cfe4ff
+    }
+
+    #thinkbody {
+      max-height: 40vh;
+      overflow: auto;
+      padding: 10px;
+      white-space: pre-wrap;
+      color: #e0edff
+    }
+
+    #thinkhdr .chip {
+      font-size: 12px;
+      background: #092245;
+      color: #93c5fd;
+      border: 1px solid #1e40af;
+      padding: 2px 6px;
+      border-radius: 999px
+    }
+
+    #thinkhdr button {
+      background: #0e1a2b;
+      border: 1px solid #2a4066;
+      color: #cfe4ff;
+      border-radius: 8px;
+      padding: 4px 6px;
+      cursor: pointer
+    }
+
+    /* Toggle Switch */
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 36px;
+      height: 20px;
+      flex-shrink: 0;
+    }
+
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .icon-btn {
+      background: transparent;
+      border: none;
+      color: #94a3b8;
+      cursor: pointer;
+      padding: 2px;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+
+    .icon-btn:hover {
+      background: #334155;
+      color: white;
+    }
+
+    .tree-input {
+      background: #1e293b;
+      border: 1px solid #3b82f6;
+      color: white;
+      padding: 2px 4px;
+      width: 100%;
+      border-radius: 2px;
+      font-size: 13px;
+      outline: none;
+    }
+
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #334155;
+      transition: .4s;
+      border-radius: 34px;
+    }
+
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 14px;
+      width: 14px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: .4s;
+      border-radius: 50%;
+    }
+
+    input:checked+.slider {
+      background-color: var(--blue);
+    }
+
+    input:checked+.slider:before {
+      transform: translateX(16px);
+    }
+
+    #graph-container {
+      width: 100%;
+      height: 100%;
+    }
   </style>
   <script src="https://unpkg.com/@antv/g6@4.8.24/dist/g6.min.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/xterm/5.3.0/xterm.min.css" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xterm/5.3.0/xterm.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xterm-addon-fit/0.8.0/xterm-addon-fit.min.js"></script>
+  <!-- CodeMirror -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/python/python.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/javascript/javascript.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/css/css.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/htmlmixed/htmlmixed.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/xml/xml.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/theme/dracula.min.css" />
 </head>
+
 <body>
   <div class="app">
     <aside class="side">
@@ -89,8 +638,12 @@
       <section id="setup">
         <div class="row">
           <div class="group">
-            <label>Manager Mode</label>
-            <select id="mode"><option>Auto</option><option>RoundRobin</option><option>Manual</option></select>
+            <label>Execution Strategy</label>
+            <select id="mode">
+              <option>Auto</option>
+              <option>RoundRobin</option>
+              <option>Manual</option>
+            </select>
           </div>
           <div class="group">
             <label>Max Turns</label>
@@ -98,43 +651,70 @@
           </div>
         </div>
         <div class="row">
-            <div class="group">
-                <label>Team Temperature</label>
-                <input id="temperature" type="number" min="0" max="2" step="0.1" value="0.3" />
-            </div>
-        </div>
-        <div class="card">
-          <div style="font-weight:700;margin-bottom:6px">Scenario Mode</div>
-          <textarea id="scenario" placeholder="Describe a scenario, e.g. 'two presidents debating climate change' or 'a team of developers building a web app'"></textarea>
-          <div class="row" style="margin-top:6px; align-items:center;">
-            <div class="group" style="margin:0;">
-              <label>Number of Agents</label>
-              <input id="num-agents" type="number" min="2" max="10" value="3" />
-            </div>
-            <button id="generate-agents" class="btn btn-primary">Create Agents from Scenario</button>
+          <div class="group">
+            <label>Team Temperature</label>
+            <input id="temperature" type="number" min="0" max="2" step="0.1" value="0.3" />
+          </div>
+          <div class="group" id="autonomous-user-container"
+            style="display:flex; flex-direction:column; justify-content:flex-end; padding-bottom:4px;">
+            <label style="display:flex;align-items:center;cursor:pointer;gap:10px">
+              <div class="switch">
+                <input type="checkbox" id="autonomous-user" />
+                <span class="slider"></span>
+              </div>
+              <div style="font-weight:600;font-size:13px">Autonomous User</div>
+            </label>
+
           </div>
         </div>
-        <div class="group">
-          <label>Team Goal</label>
-          <textarea id="goal" placeholder="e.g. Build a Flask app and write files to workspace"></textarea>
-        </div>
-        <div class="group">
-          <label style="display:flex; align-items:center; gap:8px;">
-            <input type="checkbox" id="auto-populate-team" />
-            <span>Auto-populate team from goal</span>
-          </label>
-        </div>
-        <div class="card" id="add-bot-card">
-          <div style="font-weight:700;margin-bottom:6px">Add Bot</div>
-          <input id="bot-title" placeholder="Bot Title (e.g. Python Expert)" style="margin-bottom:6px" />
-          <label for="bot-description">Description (optional)</label>
-          <textarea id="bot-description" placeholder="Leave blank for AI to generate" style="min-height:50px; margin-bottom:6px;"></textarea>
-          <div style="display:flex;justify-content:flex-end;">
-            <button id="bot-add" class="btn btn-primary">Add</button>
+
+        <!-- Mode Toggle -->
+        <div class="group" style="margin-top:20px; margin-bottom: 10px;">
+          <label>Team Composition Method</label>
+          <div class="segmented-control">
+            <button id="btn-mode-scenario" class="segment active">Scenario</button>
+            <button id="btn-mode-manual" class="segment">Manual</button>
           </div>
         </div>
+
+        <!-- Scenario Mode Input -->
+        <div id="mode-scenario-container">
+          <div class="card">
+            <div style="font-weight:700;margin-bottom:6px">Describe Scenario</div>
+            <textarea id="scenario"
+              placeholder="Describe a scenario, e.g. 'two presidents debating climate change' or 'a team of developers building a web app'"></textarea>
+            <div class="row" style="margin-top:6px; align-items:center;">
+              <div class="group" style="margin:0;">
+                <label>Number of Agents</label>
+                <input id="num-agents" type="number" min="2" max="10" value="3" />
+              </div>
+              <button id="generate-agents" class="btn btn-primary">Generate Team</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Manual Mode Input -->
+        <div id="mode-manual-container" class="hidden">
+          <div class="card" id="add-bot-card">
+            <div style="font-weight:700;margin-bottom:6px">Add Agent Manually</div>
+            <input id="bot-title" placeholder="Agent Name (e.g. Python_Expert)" style="margin-bottom:6px" />
+            <label for="bot-description">System Message (optional)</label>
+            <textarea id="bot-description" placeholder="You are a helpful assistant..."
+              style="min-height:50px; margin-bottom:6px;"></textarea>
+            <div style="display:flex;justify-content:flex-end;">
+              <button id="bot-add" class="btn btn-primary">Add Agent</button>
+            </div>
+          </div>
+
+          <div class="group" style="margin-top:20px">
+            <label>Team Goal</label>
+            <textarea id="goal" placeholder="e.g. Build a Flask app and write files to workspace"></textarea>
+          </div>
+        </div>
+
+
         <div class="group">
-          <div style="font-weight:700;margin-bottom:6px">Team</div>
+          <div style="font-weight:700;margin-bottom:6px">Current Team</div>
           <div id="team"></div>
         </div>
         <div class="group" id="actions"></div>
@@ -143,26 +723,54 @@
         </div>
       </section>
 
-      <section id="work" class="hidden">
-        <div class="ws-actions">
-          <div class="ws-upload">
-            <input id="file" type="file" />
-            <button id="upload" class="btn btn-neutral">Upload File</button>
+      <section id="work" class="hidden"
+        style="display:flex; flex-direction:column; height:100% !important; padding:0; background:#0b1220;">
+        <div style="display:flex; flex:1; overflow:hidden;">
+          <!-- File Tree Sidebar -->
+          <div
+            style="width:250px; min-width:250px; background:#0f172a; border-right:1px solid #334151; display:flex; flex-direction:column;">
+
+            <div
+              style="padding:10px 14px; border-bottom:1px solid #334151; display:flex; align-items:center; justify-content:space-between; background:#1e293b">
+              <span style="font-weight:600; font-size:11px; color:#94a3b8; letter-spacing:0.5px">WORKSPACE</span>
+              <div style="display:flex; gap:6px">
+                <button class="icon-btn" onclick="showCreateInput('file')" title="New File">📄</button>
+                <button class="icon-btn" onclick="showCreateInput('folder')" title="New Folder">📂</button>
+                <button class="icon-btn" onclick="refreshTree()" title="Refresh">↻</button>
+                <label class="icon-btn" title="Upload File" style="cursor:pointer">
+                  ⬆<input id="upload-input" type="file" style="display:none" onchange="window.handleUpload(this)" />
+                </label>
+              </div>
+            </div>
+
+            <div class="tree" id="tree" style="flex:1; overflow:auto; padding:10px;"></div>
           </div>
-          <div class="ws-buttons">
-            <button id="new-folder" class="btn btn-neutral">New Folder</button>
-            <button id="refresh" class="btn btn-neutral">Refresh</button>
+
+          <!-- Editor Area -->
+          <div style="flex:1; display:flex; flex-direction:column; background:#1e1e1e; overflow:hidden">
+            <div id="editor-header"
+              style="height:40px; background:#1f2937; border-bottom:1px solid #374151; display:flex; align-items:center; padding:0 10px; justify-content:space-between;">
+              <span id="current-file" style="font-weight:600; color:#e5e7eb; font-size:13px;">No file selected</span>
+              <div style="display:flex; gap:8px">
+                <button id="run-file" class="btn btn-success" style="padding:4px 12px; font-size:12px;" disabled>▶
+                  Run</button>
+                <button id="save-file" class="btn btn-primary" style="padding:4px 12px; font-size:12px;"
+                  disabled>Save</button>
+              </div>
+            </div>
+            <!-- Relative container for CodeMirror absolutely positioned elements -->
+            <div id="editor-container" style="position:relative; flex:1; overflow:hidden;"></div>
           </div>
         </div>
-        <div class="tree" id="tree"></div>
       </section>
 
-      <section id="terminal" class="hidden" style="padding:0; background:#000; display: flex; flex: 1;">
+      <section id="terminal" class="hidden">
         <div id="terminal-container" style="width:100%; height:100%"></div>
       </section>
 
       <section id="graph" class="hidden">
-        <div id="graph-container" style="width: 100%; height: 500px; background: #111827; border: 1px solid #334155; border-radius: 8px;"></div>
+        <div id="graph-container"
+          style="width: 100%; height: 500px; background: #111827; border: 1px solid #334155; border-radius: 8px;"></div>
       </section>
 
       <section id="playground" class="hidden">
@@ -172,13 +780,16 @@
         </div>
         <div class="group">
           <label>System Message</label>
-          <textarea id="playground-system-message" placeholder="e.g., You are a helpful assistant.">You are a helpful assistant.</textarea>
+          <textarea id="playground-system-message"
+            placeholder="e.g., You are a helpful assistant.">You are a helpful assistant.</textarea>
         </div>
         <div class="group">
           <label>Tools</label>
           <div id="playground-tools" style="display: flex; flex-wrap: wrap; gap: 6px;"></div>
         </div>
-        <div id="playground-chat-area" style="flex: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-top: 10px; min-height: 200px;"></div>
+        <div id="playground-chat-area"
+          style="flex: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-top: 10px; min-height: 200px;">
+        </div>
         <form id="playground-form" style="display: flex; gap: 8px; margin-top: 10px;">
           <input id="playground-input" placeholder="Talk to your agent..." />
           <button id="playground-send" class="btn btn-primary">Send</button>
@@ -195,8 +806,8 @@
           <div id="model-hint" style="color:#9ca3af;font-size:12px;margin-top:4px"></div>
         </div>
         <div class="group">
-            <label>Default Temperature</label>
-            <input id="default-temp" type="number" min="0" max="2" step="0.1" value="0.3" />
+          <label>Default Temperature</label>
+          <input id="default-temp" type="number" min="0" max="2" step="0.1" value="0.3" />
         </div>
         <div class="group">
           <label>Ollama Base URL</label>
@@ -204,7 +815,8 @@
             <input id="ollamaBase" value="http://192.168.86.30:11434" />
             <button id="saveBase" class="btn btn-primary">Save</button>
           </div>
-          <div id="baseHint" style="color:#9ca3af;font-size:12px;margin-top:4px">Example: http://192.168.86.30:11434</div>
+          <div id="baseHint" style="color:#9ca3af;font-size:12px;margin-top:4px">Example: http://192.168.86.30:11434
+          </div>
         </div>
         <div class="group">
           <button id="probe" class="btn btn-neutral">Probe Ollama</button>
@@ -237,30 +849,35 @@
     </main>
   </div>
 
-    <!-- Sessions Modal -->
-    <div id="sessions-modal" style="display:none; position:fixed; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1000; align-items:center; justify-content:center;">
-      <div style="background:var(--panel); padding:20px; border-radius:12px; width:min(90%, 500px); border:1px solid var(--border);">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
-          <h2 style="margin:0; font-size:18px;">Manage Sessions</h2>
-          <button id="sessions-close" class="btn btn-neutral">✕</button>
-        </div>
-        <div id="sessions-list" style="margin-bottom:15px; max-height:200px; overflow-y:auto;"></div>
-        <div class="group">
-          <label>Save Current Session As</label>
-          <div class="row2">
-            <input id="session-name" placeholder="New session name..." />
-            <button id="session-save" class="btn btn-primary">Save</button>
-          </div>
+  <!-- Sessions Modal -->
+  <div id="sessions-modal"
+    style="display:none; position:fixed; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1000; align-items:center; justify-content:center;">
+    <div
+      style="background:var(--panel); padding:20px; border-radius:12px; width:min(90%, 500px); border:1px solid var(--border);">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+        <h2 style="margin:0; font-size:18px;">Manage Sessions</h2>
+        <button id="sessions-close" class="btn btn-neutral">✕</button>
+      </div>
+      <div id="sessions-list" style="margin-bottom:15px; max-height:200px; overflow-y:auto;"></div>
+      <div class="group">
+        <label>Save Current Session As</label>
+        <div class="row2">
+          <input id="session-name" placeholder="New session name..." />
+          <button id="session-save" class="btn btn-primary">Save</button>
         </div>
       </div>
     </div>
+  </div>
 
-<div id="command-palette" style="display: none; position: fixed; top: 20%; left: 50%; transform: translateX(-50%); z-index: 1000; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 5px 15px rgba(0,0,0,0.3); width: 500px; padding: 12px;">
-  <input id="command-input" type="text" placeholder="Type a command" style="width: 100%; padding: 10px; margin-bottom: 10px; background: #111827; border: 1px solid var(--border); border-radius: 6px; color: var(--text);">
-  <ul id="command-list" style="list-style: none; padding: 0; margin: 0; max-height: 300px; overflow-y: auto;">
-    <!-- Commands will be populated here -->
-  </ul>
-</div>
-<script src="/static/js/main.js"></script>
+  <div id="command-palette"
+    style="display: none; position: fixed; top: 20%; left: 50%; transform: translateX(-50%); z-index: 1000; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 5px 15px rgba(0,0,0,0.3); width: 500px; padding: 12px;">
+    <input id="command-input" type="text" placeholder="Type a command"
+      style="width: 100%; padding: 10px; margin-bottom: 10px; background: #111827; border: 1px solid var(--border); border-radius: 6px; color: var(--text);">
+    <ul id="command-list" style="list-style: none; padding: 0; margin: 0; max-height: 300px; overflow-y: auto;">
+      <!-- Commands will be populated here -->
+    </ul>
+  </div>
+  <script src="/static/js/main.js"></script>
 </body>
+
 </html>

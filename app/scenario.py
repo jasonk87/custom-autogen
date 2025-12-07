@@ -16,7 +16,7 @@ class AgentConfig(BaseModel):
 class AgentList(BaseModel):
     agents: List[AgentConfig]
 
-async def generate_agents_from_scenario(scenario: str, model: str, num_agents: int = 3) -> List[Dict[str, Any]]:
+async def generate_agents_from_scenario(scenario: str, model: str, num_agents: int = 3, file_context: str = "") -> List[Dict[str, Any]]:
     """
     Generates a list of agents from a scenario description using an LLM
     with structured output (JSON schema).
@@ -25,30 +25,28 @@ async def generate_agents_from_scenario(scenario: str, model: str, num_agents: i
     client = OpenAIChatCompletionClient(
         model=model or DEFAULT_MODEL,
         api_key=GEMINI_API_KEY,
-        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-        temperature=0.1
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
     )
 
     prompt = f"""
-You are an expert agent creator.
-Your task is to generate a list of {num_agents} agents that would be suitable for the following scenario:
+You are an expert technical lead and agent architect.
+Your task is to analyze the following User Scenario and the current Project Context (existing files).
+Then, generate a list of {num_agents} specialized AI agents that can collaborate to fulfill the scenario.
+
+User Scenario:
 "{scenario}"
 
-The agents should have diverse roles and capabilities to effectively collaborate on the scenario.
-The agents should have diverse roles and capabilities to effectively collaborate on the scenario.
+Project Context (Existing Files):
+{file_context}
+
+Instructions:
+1. Analyze the existing files to understand the current state of the project.
+2. Design agents that complement specific roles needed to extend the current codebase. Avoid generic roles if specific verification or refactoring is needed.
+3. The agents should have diverse capabilities (coding, reviewing, testing, planning).
+
 Please generate a JSON object that conforms to the following schema:
 {AgentList.model_json_schema()}
 """
-
-    # We need to manually enforce JSON output since OpenAIChatCompletionClient might not support `format='json'` directly in the same way as Ollama client or it might differ.
-    # However, Gemini supports response_format={"type": "json_object"} if we were using the google client directly, but through OpenAI compat layer it should also work if supported.
-    # But for safety, let's ask for JSON in the prompt and parse it.
-
-    # Actually, AutoGen's client `create` method takes `response_format`.
-    # But `OpenAIChatCompletionClient` is a `ChatCompletionClient`.
-    # Let's use `create` if available or `create_stream`.
-
-    # Wait, `client.create` returns a `CreateResult`.
 
     response = await client.create(
         messages=[UserMessage(content=prompt, source="user")]
@@ -76,15 +74,22 @@ Please generate a JSON object that conforms to the following schema:
 
     # Now, make a second call to generate a team goal
     goal_prompt = f"""
-Based on the following scenario:
-"{scenario}"
+You are an expert Technical Project Manager.
+Context:
+- Scenario: "{scenario}"
+- Current Files: {file_context}
+- Team: {", ".join(a['name'] for a in agents)}
 
-And the following team of agents that has been created:
-{json.dumps(agents, indent=2)}
+Task:
+Write a DETAILED, STEP-BY-STEP Implementation Plan (Goal) for this team.
+The goal should be a single comprehensive string (can use markdown).
+It must:
+1. Reference specific existing files if they need modification.
+2. Break down the scenario into technical steps (e.g., "Step 1: Create x", "Step 2: Modify y").
+3. Assign rough responsibilities to the agents implicitly by the nature of the steps.
+4. Be actionable and rigorous.
 
-Please generate a single, concise, and actionable "Team Goal" for this team to accomplish.
-The goal should be a clear instruction that can be given to the team to start their work.
-Please only output the goal as a single string.
+Output only the plan text.
 """
 
     goal_response = await client.create(
@@ -93,3 +98,5 @@ Please only output the goal as a single string.
     suggested_goal = goal_response.content.strip()
 
     return agents, suggested_goal
+
+

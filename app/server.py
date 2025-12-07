@@ -5,6 +5,7 @@ import os
 import queue
 import subprocess
 import time
+import shutil
 import asyncio
 import struct
 from typing import Any, Dict, List, Optional, Tuple
@@ -57,10 +58,10 @@ _models_cache: Dict[str, Any] = {"ts": 0.0, "names": []}
 
 import asyncio
 
-def _run_orchestrator_thread(goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy, temperature):
+def _run_orchestrator_thread(goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy, temperature, autonomous_user):
     """Target for the orchestrator thread."""
     try:
-        asyncio.run(run_orchestrator(goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy, temperature))
+        asyncio.run(run_orchestrator(goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy, temperature, autonomous_user))
     except Exception as e:
         log.error("orchestrator_thread_error", error=str(e))
         # Ensure [DONE] is sent even if an error occurs
@@ -75,6 +76,8 @@ async def stream():
     max_turns = int(request.args.get("turns", "60"))
     human_proxy = request.args.get("human_proxy", "false").lower() == "true"
     temperature = float(request.args.get("temperature", "0.3"))
+    autonomous_user = request.args.get("autonomous_user", "false").lower() == "true"
+
     try:
         goal = base64.b64decode(goal_b64.encode()).decode(errors="ignore") if goal_b64 else ""
     except Exception:
@@ -86,7 +89,7 @@ async def stream():
     out_q: "queue.Queue[str]" = queue.Queue()
 
     # We need to run the orchestrator in a separate thread with its own event loop
-    thread_args = (goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy, temperature)
+    thread_args = (goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy, temperature, autonomous_user)
     state.start(_run_orchestrator_thread, thread_args)
 
     def gen():
@@ -133,7 +136,27 @@ async def scenario_generate():
         return jsonify({"error": "missing_scenario"}), 400
 
     try:
-        agents, suggested_goal = await generate_agents_from_scenario(scenario, model, num_agents)
+        # Gather file context
+        files = []
+        try:
+            skipped_dirs = {'.git', '__pycache__', 'node_modules', 'venv', '.idea', '.vscode'}
+            for root, dirs, filenames in os.walk(WORKSPACE_DIR):
+                dirs[:] = [d for d in dirs if d not in skipped_dirs]
+                for f in filenames:
+                    if f.startswith('.'): continue
+                    if f.endswith(('.pyc', '.pyo', '.pyd', '.git')): continue
+                    files.append(os.path.relpath(os.path.join(root, f), WORKSPACE_DIR))
+                    if len(files) > 50: # sensible limit
+                        files.append("...(truncated)")
+                        break
+                if len(files) > 50:
+                    break
+        except Exception:
+            files = ["(Error listing files)"]
+            
+        file_context = "\n".join(files)
+
+        agents, suggested_goal = await generate_agents_from_scenario(scenario, model, num_agents, file_context)
         return jsonify({"agents": agents, "goal": suggested_goal})
     except Exception as e:
         log.error("failed_to_generate_agents", exc_info=e)
@@ -270,8 +293,7 @@ async def api_delete_file():
 
     try:
         if os.path.isdir(target_path):
-            # This will only remove empty directories, which is a safe default
-            os.rmdir(target_path)
+            shutil.rmtree(target_path)
         else:
             os.remove(target_path)
         return jsonify({"ok": True})
@@ -279,6 +301,10 @@ async def api_delete_file():
         return jsonify({"error": "not_found"}), 404
     except OSError as e:
         return jsonify({"error": "os_error", "message": str(e)}), 500
+
+@app.route('/favicon.ico')
+async def favicon():
+    return Response("", status=204)
 
 @app.post("/api/workspace/new_folder")
 async def api_new_folder():
@@ -446,56 +472,68 @@ def export_html():
 
 @app.websocket("/api/workspace/terminal")
 async def ws_terminal():
-    """Handle the lifecycle of a pseudo-terminal for the workspace."""
+    """Handle pseudo-terminal (Windows compatible)."""
     await websocket.accept()
-
-    # Create a child process attached to a pseudo-terminal
-    pid, master_fd = pty.fork()
-    if pid == 0:  # Child process
-        # Start a shell
-        os.execv("/bin/bash", ["/bin/bash"])
-
-    # --- Parent Process ---
-    # Set the initial window size
-    try:
-        # Set the window size of the pty
-        fcntl.ioctl(master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
-    except Exception as e:
-        log.error("failed_to_set_winsize", error=str(e))
-
-    async def forward_pty_output():
-        """Read from pty and forward to websocket."""
+    
+    # Use standard shell
+    import sys
+    shell = "powershell.exe" if os.name == 'nt' else "/bin/bash"
+    
+    # Start subprocess
+    process = subprocess.Popen(
+        [shell],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+        cwd=WORKSPACE_DIR,
+        shell=False # Important for Popen with pipes on Windows
+    )
+    
+    async def forward_output(stream):
+        """Read from stream and forward to websocket."""
         try:
             while True:
-                # This is a blocking read, so run it in an executor
-                data = await asyncio.to_thread(os.read, master_fd, 1024)
-                if not data:
+                output = await asyncio.to_thread(stream.read, 1024)
+                if not output:
                     break
-                await websocket.send(data.decode(errors="ignore"))
-        except (asyncio.CancelledError, OSError):
+                # Handle decoding, replace errors to avoid crash
+                try:
+                    text = output.decode('utf-8', errors='replace')
+                    # Convert newlines for terminal
+                    text = text.replace('\n', '\r\n') if os.name == 'nt' else text
+                    await websocket.send(text)
+                except Exception:
+                   pass
+        except Exception:
             pass
 
-    async def forward_websocket_input():
-        """Read from websocket and forward to pty."""
+    async def forward_input():
+        """Read from websocket and forward to process stdin."""
         try:
             while True:
                 data = await websocket.receive()
-                # Handle resize messages from the frontend
                 if data.startswith("resize:"):
-                    try:
-                        _, rows, cols = data.split(":")
-                        winsize = struct.pack("HHHH", int(rows), int(cols), 0, 0)
-                        fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
-                    except Exception as e:
-                        log.error("failed_to_resize_pty", error=str(e))
-                else:
-                    os.write(master_fd, data.encode())
-        except asyncio.CancelledError:
+                    continue # Ignore resize on Windows (not supported via pipes)
+                
+                # Write to process
+                if process.stdin:
+                     await asyncio.to_thread(process.stdin.write, data.encode())
+                     await asyncio.to_thread(process.stdin.flush)
+        except Exception:
             pass
-
-    # Create and run the two forwarding tasks
-    pty_task = asyncio.create_task(forward_pty_output())
-    ws_task = asyncio.create_task(forward_websocket_input())
+            
+    # Tasks
+    out_task = asyncio.create_task(forward_output(process.stdout))
+    err_task = asyncio.create_task(forward_output(process.stderr))
+    in_task = asyncio.create_task(forward_input())
+    
+    try:
+        await asyncio.gather(in_task, out_task, err_task)
+    except Exception:
+        pass
+    finally:
+        process.terminate()
 
     try:
         await asyncio.gather(pty_task, ws_task)
