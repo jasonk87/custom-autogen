@@ -1,17 +1,26 @@
 import base64
-import base64
 import io
 import json
 import os
 import queue
 import subprocess
 import time
-import pty
+import shutil
 import asyncio
-import fcntl
 import struct
-import termios
 from typing import Any, Dict, List, Optional, Tuple
+
+# WINDOWS FIX: Only load these on Linux/Mac
+try:
+    import pty
+    import fcntl
+    import termios
+except ImportError:
+    # On Windows, these don't exist, so we set them to None to prevent crashing.
+    # Note: The "Terminal" tab in the app will not work on Windows.
+    pty = None
+    fcntl = None
+    termios = None
 
 import httpx
 from quart import Quart, Response, jsonify, request, send_from_directory, render_template, websocket
@@ -25,9 +34,9 @@ from app.config import (
     MODELS_TTL_SEC,
     SESSIONS_DIR,
     WORKSPACE_DIR,
+    GEMINI_API_KEY,
 )
 from app.core import run_orchestrator
-from app.ollama import _http, get_ollama_endpoints, set_ollama_host, OLLAMA_BASE_URL
 from .scenario import generate_agents_from_scenario
 from app.state import state
 from app.tools import TOOLS
@@ -35,7 +44,7 @@ from app.utils import tree_listing
 from autogen_agentchat.agents import AssistantAgent, UserProxyAgent
 from autogen_agentchat.messages import TextMessage
 from autogen_agentchat.teams import SelectorGroupChat
-from autogen_ext.models.ollama import OllamaChatCompletionClient
+from autogen_ext.models.openai import OpenAIChatCompletionClient
 
 # To handle templates and static files correctly when run from main.py
 app_dir = os.path.dirname(os.path.abspath(__file__))
@@ -49,10 +58,10 @@ _models_cache: Dict[str, Any] = {"ts": 0.0, "names": []}
 
 import asyncio
 
-def _run_orchestrator_thread(goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy, temperature):
+def _run_orchestrator_thread(goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy, temperature, autonomous_user):
     """Target for the orchestrator thread."""
     try:
-        asyncio.run(run_orchestrator(goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy, temperature))
+        asyncio.run(run_orchestrator(goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy, temperature, autonomous_user))
     except Exception as e:
         log.error("orchestrator_thread_error", error=str(e))
         # Ensure [DONE] is sent even if an error occurs
@@ -67,6 +76,8 @@ async def stream():
     max_turns = int(request.args.get("turns", "60"))
     human_proxy = request.args.get("human_proxy", "false").lower() == "true"
     temperature = float(request.args.get("temperature", "0.3"))
+    autonomous_user = request.args.get("autonomous_user", "false").lower() == "true"
+
     try:
         goal = base64.b64decode(goal_b64.encode()).decode(errors="ignore") if goal_b64 else ""
     except Exception:
@@ -78,7 +89,7 @@ async def stream():
     out_q: "queue.Queue[str]" = queue.Queue()
 
     # We need to run the orchestrator in a separate thread with its own event loop
-    thread_args = (goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy, temperature)
+    thread_args = (goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy, temperature, autonomous_user)
     state.start(_run_orchestrator_thread, thread_args)
 
     def gen():
@@ -125,10 +136,30 @@ async def scenario_generate():
         return jsonify({"error": "missing_scenario"}), 400
 
     try:
-        agents, suggested_goal = await generate_agents_from_scenario(scenario, model, num_agents)
+        # Gather file context
+        files = []
+        try:
+            skipped_dirs = {'.git', '__pycache__', 'node_modules', 'venv', '.idea', '.vscode'}
+            for root, dirs, filenames in os.walk(WORKSPACE_DIR):
+                dirs[:] = [d for d in dirs if d not in skipped_dirs]
+                for f in filenames:
+                    if f.startswith('.'): continue
+                    if f.endswith(('.pyc', '.pyo', '.pyd', '.git')): continue
+                    files.append(os.path.relpath(os.path.join(root, f), WORKSPACE_DIR))
+                    if len(files) > 50: # sensible limit
+                        files.append("...(truncated)")
+                        break
+                if len(files) > 50:
+                    break
+        except Exception:
+            files = ["(Error listing files)"]
+            
+        file_context = "\n".join(files)
+
+        agents, suggested_goal = await generate_agents_from_scenario(scenario, model, num_agents, file_context)
         return jsonify({"agents": agents, "goal": suggested_goal})
     except Exception as e:
-        log.error("failed_to_generate_agents", error=e)
+        log.error("failed_to_generate_agents", exc_info=e)
         return jsonify({"error": str(e)}), 500
 
 @app.post("/choose_next")
@@ -142,32 +173,13 @@ def choose_next():
 
 @app.post("/api/settings/ollama")
 def set_ollama():
-    data = request.json or {}
-    url = (data.get("base") or "").strip()
-    if not url:
-        return jsonify({"error": "missing_base"}), 400
-    set_ollama_host(url)
-    return jsonify({"ok": True, "base": url})
+    # Deprecated/Removed for Gemini switch, but keeping a stub to avoid frontend breaking if it calls it
+    return jsonify({"ok": True, "message": "Ollama support has been replaced with Gemini."})
 
 @app.get("/api/models")
 def api_models():
-    global _models_cache
-    now = time.time()
-    if now - _models_cache["ts"] < MODELS_TTL_SEC and _models_cache["names"]:
-        return jsonify(_models_cache["names"])
-    tags_url, _ = get_ollama_endpoints()
-    try:
-        r = _http.get(tags_url)
-        r.raise_for_status()
-        payload = r.json() or {}
-        models = payload.get("models", [])
-        names = [m.get("name") for m in models if isinstance(m, dict) and m.get("name")]
-        _models_cache = {"ts": now, "names": names}
-        return jsonify(names)
-    except httpx.HTTPError as e:
-        return jsonify({"error": "connect_failed", "message": str(e)}), 503
-    except ValueError as e:
-        return jsonify({"error": "bad_json", "message": str(e)}), 502
+    # Hardcoded list of Gemini models
+    return jsonify(["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.0-pro"])
 
 @app.get("/api/tools")
 def api_tools():
@@ -192,7 +204,11 @@ async def api_agent_run():
 
     try:
         # 1. Create model client
-        ollama_client = OllamaChatCompletionClient(model=model, host=OLLAMA_BASE_URL)
+        gemini_client = OpenAIChatCompletionClient(
+            model=model,
+            api_key=GEMINI_API_KEY,
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+        )
 
         # 2. Filter the tools based on the user's selection
         selected_tool_names = agent_config.get("tools", [])
@@ -201,7 +217,7 @@ async def api_agent_run():
         # 3. Create the agent
         agent = AssistantAgent(
             name=agent_config.get("name", "playground_agent"),
-            model_client=ollama_client,
+            model_client=gemini_client,
             system_message=agent_config.get("system_message", "You are a helpful assistant."),
             tools=selected_tools,
         )
@@ -210,7 +226,7 @@ async def api_agent_run():
         user_proxy = UserProxyAgent(name="user_proxy")
 
         # 5. Use a simple group chat of two agents to run the conversation
-        team = SelectorGroupChat(participants=[user_proxy, agent], max_turns=5, model_client=ollama_client)
+        team = SelectorGroupChat(participants=[user_proxy, agent], max_turns=5, model_client=gemini_client)
 
         # This can be run directly since we are in an async route.
         final = None
@@ -258,8 +274,8 @@ def api_upload():
     return jsonify({"ok": True, "file": fn, "bytes": size})
 
 @app.get("/workspace/<path:fn>")
-def ws_file(fn: str):
-    return send_from_directory(WORKSPACE_DIR, fn)
+async def ws_file(fn: str):
+    return await send_from_directory(WORKSPACE_DIR, fn)
 
 @app.delete("/api/workspace/delete")
 async def api_delete_file():
@@ -277,8 +293,7 @@ async def api_delete_file():
 
     try:
         if os.path.isdir(target_path):
-            # This will only remove empty directories, which is a safe default
-            os.rmdir(target_path)
+            shutil.rmtree(target_path)
         else:
             os.remove(target_path)
         return jsonify({"ok": True})
@@ -286,6 +301,10 @@ async def api_delete_file():
         return jsonify({"error": "not_found"}), 404
     except OSError as e:
         return jsonify({"error": "os_error", "message": str(e)}), 500
+
+@app.route('/favicon.ico')
+async def favicon():
+    return Response("", status=204)
 
 @app.post("/api/workspace/new_folder")
 async def api_new_folder():
@@ -453,56 +472,68 @@ def export_html():
 
 @app.websocket("/api/workspace/terminal")
 async def ws_terminal():
-    """Handle the lifecycle of a pseudo-terminal for the workspace."""
+    """Handle pseudo-terminal (Windows compatible)."""
     await websocket.accept()
-
-    # Create a child process attached to a pseudo-terminal
-    pid, master_fd = pty.fork()
-    if pid == 0:  # Child process
-        # Start a shell
-        os.execv("/bin/bash", ["/bin/bash"])
-
-    # --- Parent Process ---
-    # Set the initial window size
-    try:
-        # Set the window size of the pty
-        fcntl.ioctl(master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
-    except Exception as e:
-        log.error("failed_to_set_winsize", error=str(e))
-
-    async def forward_pty_output():
-        """Read from pty and forward to websocket."""
+    
+    # Use standard shell
+    import sys
+    shell = "powershell.exe" if os.name == 'nt' else "/bin/bash"
+    
+    # Start subprocess
+    process = subprocess.Popen(
+        [shell],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+        cwd=WORKSPACE_DIR,
+        shell=False # Important for Popen with pipes on Windows
+    )
+    
+    async def forward_output(stream):
+        """Read from stream and forward to websocket."""
         try:
             while True:
-                # This is a blocking read, so run it in an executor
-                data = await asyncio.to_thread(os.read, master_fd, 1024)
-                if not data:
+                output = await asyncio.to_thread(stream.read, 1024)
+                if not output:
                     break
-                await websocket.send(data.decode(errors="ignore"))
-        except (asyncio.CancelledError, OSError):
+                # Handle decoding, replace errors to avoid crash
+                try:
+                    text = output.decode('utf-8', errors='replace')
+                    # Convert newlines for terminal
+                    text = text.replace('\n', '\r\n') if os.name == 'nt' else text
+                    await websocket.send(text)
+                except Exception:
+                   pass
+        except Exception:
             pass
 
-    async def forward_websocket_input():
-        """Read from websocket and forward to pty."""
+    async def forward_input():
+        """Read from websocket and forward to process stdin."""
         try:
             while True:
                 data = await websocket.receive()
-                # Handle resize messages from the frontend
                 if data.startswith("resize:"):
-                    try:
-                        _, rows, cols = data.split(":")
-                        winsize = struct.pack("HHHH", int(rows), int(cols), 0, 0)
-                        fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
-                    except Exception as e:
-                        log.error("failed_to_resize_pty", error=str(e))
-                else:
-                    os.write(master_fd, data.encode())
-        except asyncio.CancelledError:
+                    continue # Ignore resize on Windows (not supported via pipes)
+                
+                # Write to process
+                if process.stdin:
+                     await asyncio.to_thread(process.stdin.write, data.encode())
+                     await asyncio.to_thread(process.stdin.flush)
+        except Exception:
             pass
-
-    # Create and run the two forwarding tasks
-    pty_task = asyncio.create_task(forward_pty_output())
-    ws_task = asyncio.create_task(forward_websocket_input())
+            
+    # Tasks
+    out_task = asyncio.create_task(forward_output(process.stdout))
+    err_task = asyncio.create_task(forward_output(process.stderr))
+    in_task = asyncio.create_task(forward_input())
+    
+    try:
+        await asyncio.gather(in_task, out_task, err_task)
+    except Exception:
+        pass
+    finally:
+        process.terminate()
 
     try:
         await asyncio.gather(pty_task, ws_task)
