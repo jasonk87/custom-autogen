@@ -210,7 +210,14 @@ async def api_agent_run():
         async for event in team.run_stream(task=message):
             final = event
 
-        reply = final.messages[-1].content if final and final.messages else "No response."
+        # We need to extract the response. The final event is likely the last message?
+        # But run_stream yields events.
+        # final might be the last event.
+        reply = "No response."
+        if final and hasattr(final, "messages") and final.messages:
+             reply = final.messages[-1].content
+        elif final and hasattr(final, "content"):
+             reply = final.content
 
         return jsonify({"reply": reply})
     except Exception as e:
@@ -448,6 +455,11 @@ def export_html():
 async def ws_terminal():
     """Handle the lifecycle of a pseudo-terminal for the workspace."""
     await websocket.accept()
+
+    # Check if pty is available
+    if not pty:
+        await websocket.send("Error: pty not available on this system.")
+        return
 
     # Create a child process attached to a pseudo-terminal
     pid, master_fd = pty.fork()
