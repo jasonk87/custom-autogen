@@ -4,64 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Custom Agent Studio — v10</title>
-  <style>
-    :root{--bg:#0f172a;--panel:#1f2937;--muted:#9ca3af;--text:#e5e7eb;--border:#374151;--chip:#334155;--blue:#2563eb;--blue2:#1d4ed8;--red:#ef4444;--green:#10b981;--amber:#f59e0b}
-    *{box-sizing:border-box} body{margin:0;background:#0b1220;color:var(--text);font:14px/1.4 system-ui,Segoe UI,Inter,Arial}
-    .app{display:flex;height:100vh}
-    .side{width:34%;background:var(--panel);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:18px}
-    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
-    h1{font-size:18px;margin:0}
-    .tabs{display:flex;border-bottom:1px solid var(--border);margin-bottom:10px}
-    .tab{flex:1;padding:10px 8px;border:none;background:transparent;color:#cbd5e1;font-weight:600;cursor:pointer;transition:150ms}
-    .tab.active{background:var(--chip);color:white;border-radius:6px 6px 0 0}
-    .group{margin:8px 0}
-    label{display:block;margin-bottom:4px;color:#cbd5e1;font-size:12px}
-    input,select,textarea{width:100%;background:#111827;color:#e5e7eb;border:1px solid #334155;border-radius:8px;padding:8px}
-    textarea{min-height:70px}
-    .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-    .card{background:#0f172a;border:1px solid var(--border);border-radius:10px;padding:10px}
-    .btn{display:inline-flex;align-items:center;justify-content:center;border:none;border-radius:10px;padding:10px 12px;font-weight:600;color:white;cursor:pointer;transition:150ms}
-    .btn:disabled{opacity:.5;cursor:not-allowed}
-    .btn-primary{background:var(--blue)} .btn-primary:hover{background:var(--blue2)}
-    .btn-danger{background:var(--red)} .btn-success{background:var(--green)} .btn-neutral{background:#374151}
-    .team-item{display:flex;gap:6px;align-items:center;background:#0b1220;border:1px solid #2b3443;border-radius:8px;padding:6px}
-    .team-item .name{font-weight:700} .team-item .sys{flex:1} .team-item .num{width:70px}
-    .main{flex:1;display:flex;flex-direction:column;background:#0b1220;position:relative}
-    #chat{flex:1;overflow:auto;padding:18px}
-    .bubble{max-width:90%;white-space:pre-wrap;border-radius:12px;padding:10px;margin:8px 0;box-shadow:0 4px 10px rgba(0,0,0,.15)}
-    .from-you{background:#1d4ed8;margin-left:auto} .from-them{background:#1f2937}
-    .who{font-size:11px;opacity:.9;margin-bottom:4px}
-    #status{padding:10px;text-align:center;border-top:1px solid var(--border);background:var(--panel)}
-    #fbform{display:flex;gap:8px;border-top:1px solid var(--border);padding:10px;background:var(--panel)}
-    .hidden{display:none}
-    .pill{display:inline-block;background:#0b213f;border:1px solid #23406e;color:#cfe4ff;border-radius:999px;padding:4px 8px;font-size:12px}
-    .row2{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end}
-    .tree ul{list-style:none;padding-left:14px} .tree li{margin:4px 0}
-    .ws-actions{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
-    .ws-upload{display:flex;gap:8px;align-items:center}
-    .ws-buttons{display:flex;gap:8px}
-    .tree .node{display:flex;align-items:center;gap:6px;padding:4px;border-radius:6px;cursor:pointer}
-    .tree .node:hover{background-color:var(--chip)}
-    .tree .node-icon{width:20px;text-align:center}
-    .tree .node-name{flex:1}
-    .tree .node-actions button{visibility:hidden;background:transparent;color:var(--muted);padding:2px 4px}
-    .tree .node:hover .node-actions button{visibility:visible}
-    .tree .node .node-actions button:hover{color:var(--text)}
-    .tree .node-name-input{flex:1;background:#374151;color:var(--text);border:1px solid var(--blue);border-radius:4px;padding:0 2px}
-
-    /* Command Palette */
-    #command-list .command-item { padding: 8px 12px; cursor: pointer; border-radius: 6px; }
-    #command-list .command-item:hover, #command-list .command-item.selected { background-color: var(--chip); }
-
-    /* Thinking UI */
-    #thinkdock{position:absolute;right:16px;bottom:72px;max-width:420px;width:min(42vw,420px);background:#0b213f;border:1px solid #23406e;border-radius:12px;box-shadow:0 10px 25px rgba(0,0,0,.35);display:none}
-    #thinkhdr{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-bottom:1px solid #1f3a63}
-    #thinkhdr .title{font-weight:700;color:#cfe4ff}
-    #thinkbody{max-height:40vh;overflow:auto;padding:10px;white-space:pre-wrap;color:#e0edff}
-    #thinkhdr .chip{font-size:12px;background:#092245;color:#93c5fd;border:1px solid #1e40af;padding:2px 6px;border-radius:999px}
-    #thinkhdr button{background:#0e1a2b;border:1px solid #2a4066;color:#cfe4ff;border-radius:8px;padding:4px 6px;cursor:pointer}
-    #graph-container{width:100%;height:100%;}
-  </style>
+  <link rel="stylesheet" href="/static/css/style.css" />
   <script src="https://unpkg.com/@antv/g6@4.8.24/dist/g6.min.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/xterm/5.3.0/xterm.min.css" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xterm/5.3.0/xterm.min.js"></script>
@@ -69,12 +12,10 @@
 </head>
 <body>
   <div class="app">
-    <aside class="side">
+    <nav class="side">
       <header>
-        <h1>Custom Agent Studio</h1>
-        <div style="display:flex;gap:8px">
-          <button id="sessions" class="btn btn-neutral">Sessions</button>
-        </div>
+        <h1>Agent Studio</h1>
+        <button id="sessions" class="btn btn-neutral" style="padding: 4px 8px; font-size: 11px;">Sessions</button>
       </header>
 
       <div class="tabs">
@@ -88,68 +29,66 @@
 
       <section id="setup">
         <div class="card">
-            <div style="font-weight:700;margin-bottom:6px">Scenario</div>
-            <textarea id="scenario" placeholder="Describe a scenario, e.g. 'two presidents debating climate change' or 'a team of developers building a web app'"></textarea>
-            <div class="row" style="margin-top:6px; align-items:center;">
+            <div style="font-weight:600; margin-bottom:8px; font-size:13px; color:var(--text)">Scenario</div>
+            <textarea id="scenario" placeholder="Describe the task... (e.g., 'A debate between two philosophers about AI consciousness')"></textarea>
+            <div class="row" style="margin-top:12px; align-items:end;">
               <div class="group" style="margin:0;">
-                <label>Number of Agents</label>
+                <label>Agents</label>
                 <input id="num-agents" type="number" min="2" max="10" value="3" />
               </div>
-              <button id="generate-agents" class="btn btn-primary">Create Agents</button>
+              <button id="generate-agents" class="btn btn-primary" style="width:100%">Generate Team</button>
             </div>
         </div>
 
         <div class="group">
-          <label>Team Goal</label>
-          <textarea id="goal" placeholder="e.g. Build a Flask app and write files to workspace"></textarea>
+          <label>Goal</label>
+          <textarea id="goal" placeholder="The primary objective for the agents..."></textarea>
         </div>
 
-        <details class="group" style="background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:8px;">
-            <summary style="cursor:pointer; font-weight:600; color:var(--muted)">Advanced Configuration</summary>
-            <div class="row" style="margin-top:10px">
+        <details>
+            <summary>Advanced Configuration</summary>
+            <div class="row" style="margin-top:12px">
               <div class="group">
-                <label>Manager Mode</label>
+                <label>Mode</label>
                 <select id="mode"><option>Auto</option><option>RoundRobin</option><option>Manual</option></select>
               </div>
               <div class="group">
-                <label>Max Turns</label>
+                <label>Turns</label>
                 <input id="turns" type="number" min="1" max="200" value="60" />
               </div>
             </div>
             <div class="row">
                 <div class="group">
-                    <label>Team Temperature</label>
+                    <label>Temp</label>
                     <input id="temperature" type="number" min="0" max="2" step="0.1" value="0.3" />
                 </div>
                 <div class="group" style="display:flex; align-items:end;">
-                    <label style="display:flex; align-items:center; gap:8px; cursor:pointer">
+                    <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:12px;">
                         <input type="checkbox" id="auto-populate-team" />
-                        <span>Auto-populate team</span>
+                        <span>Auto-fill</span>
                     </label>
                 </div>
             </div>
         </details>
 
-        <details class="group" style="background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:8px;">
-            <summary style="cursor:pointer; font-weight:600; color:var(--muted)">Add Manual Bot</summary>
-            <div style="margin-top:10px">
-                <input id="bot-title" placeholder="Bot Title (e.g. Python Expert)" style="margin-bottom:6px" />
-                <label for="bot-description">Description (optional)</label>
-                <textarea id="bot-description" placeholder="Leave blank for AI to generate" style="min-height:50px; margin-bottom:6px;"></textarea>
-                <div style="display:flex;justify-content:flex-end;">
-                    <button id="bot-add" class="btn btn-primary">Add</button>
-                </div>
+        <details>
+            <summary>Add Manual Bot</summary>
+            <div style="margin-top:12px; display:flex; flex-direction:column; gap:8px;">
+                <input id="bot-title" placeholder="Name (e.g. Coder)" />
+                <textarea id="bot-description" placeholder="System prompt..." style="min-height:60px;"></textarea>
+                <button id="bot-add" class="btn btn-neutral" style="align-self:end;">Add Bot</button>
             </div>
         </details>
 
-        <div class="group">
-          <div style="font-weight:700;margin-bottom:6px; display:flex; justify-content:space-between; align-items:center;">
-            <span>Team</span>
-            <span id="team-count" class="chip" style="font-size:11px">0 members</span>
+        <div class="group" style="margin-top:16px;">
+          <div style="font-weight:600; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; color:var(--text); font-size:13px;">
+            <span>Team Roster</span>
+            <span id="team-count" class="pill">0</span>
           </div>
           <div id="team"></div>
         </div>
-        <div class="group" id="actions"></div>
+
+        <div class="group" id="actions" style="margin-top:auto;"></div>
         <div class="group">
           <button id="export" class="btn btn-neutral" style="width:100%">Export Transcript</button>
         </div>
@@ -158,12 +97,13 @@
       <section id="work" class="hidden">
         <div class="ws-actions">
           <div class="ws-upload">
-            <input id="file" type="file" />
-            <button id="upload" class="btn btn-neutral">Upload File</button>
+            <input id="file" type="file" style="display:none" onchange="document.getElementById('upload').click()" />
+            <button onclick="document.getElementById('file').click()" class="btn btn-neutral">Choose File</button>
+            <button id="upload" style="display:none"></button>
           </div>
           <div class="ws-buttons">
-            <button id="new-folder" class="btn btn-neutral">New Folder</button>
-            <button id="refresh" class="btn btn-neutral">Refresh</button>
+            <button id="new-folder" class="btn btn-neutral" title="New Folder">＋</button>
+            <button id="refresh" class="btn btn-neutral" title="Refresh">↻</button>
           </div>
         </div>
         <div class="tree" id="tree"></div>
@@ -174,7 +114,7 @@
       </section>
 
       <section id="graph" class="hidden">
-        <div id="graph-container" style="width: 100%; height: 500px; background: #111827; border: 1px solid #334155; border-radius: 8px;"></div>
+        <div id="graph-container" style="background: var(--bg);"></div>
       </section>
 
       <section id="playground" class="hidden">
@@ -184,15 +124,15 @@
         </div>
         <div class="group">
           <label>System Message</label>
-          <textarea id="playground-system-message" placeholder="e.g., You are a helpful assistant.">You are a helpful assistant.</textarea>
+          <textarea id="playground-system-message">You are a helpful assistant.</textarea>
         </div>
         <div class="group">
           <label>Tools</label>
           <div id="playground-tools" style="display: flex; flex-wrap: wrap; gap: 6px;"></div>
         </div>
-        <div id="playground-chat-area" style="flex: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-top: 10px; min-height: 200px;"></div>
+        <div id="playground-chat-area" style="flex: 1; overflow-y: auto; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-top: 10px;"></div>
         <form id="playground-form" style="display: flex; gap: 8px; margin-top: 10px;">
-          <input id="playground-input" placeholder="Talk to your agent..." />
+          <input id="playground-input" placeholder="Type a message..." />
           <button id="playground-send" class="btn btn-primary">Send</button>
         </form>
       </section>
@@ -204,14 +144,14 @@
             <select id="model"></select>
             <button id="reloadModels" class="btn btn-neutral">Reload</button>
           </div>
-          <div id="model-hint" style="color:#9ca3af;font-size:12px;margin-top:4px"></div>
+          <div id="model-hint" style="color:var(--muted); font-size:11px; margin-top:4px"></div>
         </div>
         <div class="group">
             <label>Default Temperature</label>
             <input id="default-temp" type="number" min="0" max="2" step="0.1" value="0.3" />
         </div>
       </section>
-    </aside>
+    </nav>
 
     <main class="main">
       <div id="chat"></div>
@@ -221,7 +161,7 @@
         <div id="thinkhdr">
           <span class="title">Thinking</span>
           <div style="display:flex;gap:6px;align-items:center">
-            <span id="thinklen" class="chip">0 chars</span>
+            <span id="thinklen" class="pill">0 chars</span>
             <button id="thinkmin">Minimize</button>
             <button id="thinkclose">Close</button>
           </div>
@@ -231,35 +171,33 @@
 
       <div id="status">Status: Idle</div>
       <form id="fbform">
-        <input id="fb" placeholder="Type real-time feedback or ```python code```…" disabled />
+        <input id="fb" placeholder="Type message..." disabled />
         <button id="send" class="btn btn-primary" disabled>Send</button>
       </form>
     </main>
   </div>
 
     <!-- Sessions Modal -->
-    <div id="sessions-modal" style="display:none; position:fixed; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1000; align-items:center; justify-content:center;">
-      <div style="background:var(--panel); padding:20px; border-radius:12px; width:min(90%, 500px); border:1px solid var(--border);">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
-          <h2 style="margin:0; font-size:18px;">Manage Sessions</h2>
-          <button id="sessions-close" class="btn btn-neutral">✕</button>
+    <div id="sessions-modal" style="display:none; position:fixed; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:1000; align-items:center; justify-content:center; backdrop-filter: blur(2px);">
+      <div class="card" style="width:min(90%, 500px); padding:24px; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+          <h2 style="margin:0; font-size:16px;">Sessions</h2>
+          <button id="sessions-close" class="btn btn-neutral" style="padding:4px 8px;">✕</button>
         </div>
-        <div id="sessions-list" style="margin-bottom:15px; max-height:200px; overflow-y:auto;"></div>
+        <div id="sessions-list" style="margin-bottom:20px; max-height:300px; overflow-y:auto; border: 1px solid var(--border); border-radius: 6px;"></div>
         <div class="group">
-          <label>Save Current Session As</label>
+          <label>Save Current</label>
           <div class="row2">
-            <input id="session-name" placeholder="New session name..." />
+            <input id="session-name" placeholder="Name..." />
             <button id="session-save" class="btn btn-primary">Save</button>
           </div>
         </div>
       </div>
     </div>
 
-<div id="command-palette" style="display: none; position: fixed; top: 20%; left: 50%; transform: translateX(-50%); z-index: 1000; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 5px 15px rgba(0,0,0,0.3); width: 500px; padding: 12px;">
-  <input id="command-input" type="text" placeholder="Type a command" style="width: 100%; padding: 10px; margin-bottom: 10px; background: #111827; border: 1px solid var(--border); border-radius: 6px; color: var(--text);">
-  <ul id="command-list" style="list-style: none; padding: 0; margin: 0; max-height: 300px; overflow-y: auto;">
-    <!-- Commands will be populated here -->
-  </ul>
+<div id="command-palette" style="display: none; position: fixed; top: 15%; left: 50%; transform: translateX(-50%); z-index: 1000; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); width: 600px; overflow:hidden;">
+  <input id="command-input" type="text" placeholder="Type a command..." style="width: 100%; padding: 16px; border:none; border-bottom: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 16px; outline:none;">
+  <ul id="command-list" style="list-style: none; padding: 0; margin: 0; max-height: 400px; overflow-y: auto;"></ul>
 </div>
 <script src="/static/js/main.js"></script>
 </body>
