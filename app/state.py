@@ -12,6 +12,13 @@ class AppState:
     is_running: bool = False
 
     def start(self, target, args) -> None:
+        self.stop()
+        if self.thread and self.thread.is_alive():
+            try:
+                self.thread.join(timeout=2.0)
+            except Exception:
+                pass
+        
         self.stop_event.clear()
         self.user_input_q = queue.Queue()
         self.manual_next_q = queue.Queue()

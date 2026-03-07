@@ -1,13 +1,91 @@
-const $ = (s) => document.querySelector(s); const $$ = (s) => Array.from(document.querySelectorAll(s));
+let $ = (s) => document.querySelector(s); let $$ = (s) => Array.from(document.querySelectorAll(s));
 let agents = []; let streams = {}; let es = null; let manualNames = []; let lastModels = []; let term = null; let ws = null;
 const think = { active: false, buffer: '', open: false, minimized: false };
 let graph = null;
 const commands = [];
 let commandPaletteOpen = false;
 
-function toast(msg) { const t = document.createElement('div'); t.textContent = msg; t.style.cssText = 'position:fixed;right:24px;bottom:24px;background:var(--panel);color:var(--text);border:1px solid var(--primary);padding:12px 16px;border-radius:8px;box-shadow:0 10px 25px rgba(0,0,0,.35);font-size:13px;z-index:9999;font-weight:500;'; document.body.appendChild(t); setTimeout(() => t.remove(), 3000); }
-function setStatus(state) { const S = $('#status'); const map = { idle: 'Status: Idle', running: 'Status: Agents working…', waiting_for_input: 'Status: Waiting for input…' }; S.textContent = map[state] || 'Status'; $('#fb').disabled = state !== 'waiting_for_input'; $('#send').disabled = state !== 'waiting_for_input'; }
-function addMsg(sender, text, mine = false, id = null) { const box = document.createElement('div'); box.className = 'bubble ' + (mine ? 'from-you' : 'from-them'); const who = document.createElement('div'); who.className = 'who'; who.textContent = mine ? 'You' : sender; const body = document.createElement('div'); body.textContent = text || ''; box.append(who, body); $('#chat').append(box); $('#chat').scrollTop = $('#chat').scrollHeight; if (id) streams[id] = { el: body, thinkPhase: false }; }
+function toast(msg) {
+  const t = document.createElement('div');
+  t.textContent = msg;
+  t.style.cssText = `
+    position: fixed;
+    right: 32px;
+    bottom: 32px;
+    background: var(--glass-solid);
+    color: var(--text);
+    border: 1px solid var(--primary);
+    padding: 14px 24px;
+    border-radius: 12px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.5), 0 0 10px var(--primary-glow);
+    font-size: 14px;
+    z-index: 10000;
+    font-weight: 600;
+    backdrop-filter: blur(12px);
+    animation: messageIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  `;
+  document.body.appendChild(t);
+  setTimeout(() => {
+    t.style.opacity = '0';
+    t.style.transform = 'translateY(10px)';
+    t.style.transition = 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)';
+    setTimeout(() => t.remove(), 400);
+  }, 3000);
+}
+
+function setStatus(state) {
+  const S = $('#status');
+  const map = {
+    idle: 'Status: Idle',
+    running: 'Status: Agents working…',
+    waiting_for_input: 'Status: Waiting for input…'
+  };
+  S.textContent = map[state] || 'Status';
+
+  // Add a pulsing effect when agents are working
+  if (state === 'running') S.classList.add('pulse');
+  else S.classList.remove('pulse');
+
+  $('#fb').disabled = state !== 'waiting_for_input';
+  $('#send').disabled = state !== 'waiting_for_input';
+  if (state === 'waiting_for_input') {
+    $('#fb').focus();
+  }
+}
+let addMsg = function (sender, text, mine = false, id = null) {
+  const box = document.createElement('div');
+  box.className = 'bubble ' + (mine ? 'from-you' : 'from-them');
+  const who = document.createElement('div');
+  who.className = 'who';
+  who.textContent = mine ? 'YOU' : sender;
+
+  // Add an avatar-like icon based on sender
+  const icon = document.createElement('span');
+  icon.style.marginRight = '8px';
+  icon.textContent = mine ? '👤' : (sender === 'System' ? '⚙️' : (sender === 'Error' ? '⚠️' : '🤖'));
+  who.prepend(icon);
+
+  const body = document.createElement('div');
+  // Use marked if available
+  if (window.marked && text) {
+    body.innerHTML = window.marked.parse(text);
+  } else {
+    body.textContent = text || '';
+  }
+  box.append(who, body);
+
+  // Smart Scroll: Only auto-scroll if user is already at the bottom
+  const chat = $('#chat');
+  const isAtBottom = chat.scrollHeight - chat.scrollTop - chat.clientHeight < 50;
+
+  chat.append(box);
+
+  if (isAtBottom) {
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  if (id) streams[id] = { el: body, thinkPhase: false };
+}
 function appendToken(id, delta) { ensureThinkHandling(id, delta); const s = streams[id]; if (!s) { addMsg('assistant', '', false, id); } const body = streams[id].el; if (!streams[id].thinkPhase) { body.textContent += stripThinkTags(delta); } $('#chat').scrollTop = $('#chat').scrollHeight; }
 function ensureThinkHandling(id, chunk) { let c = chunk; if (c.includes('<think>') || think.active) { if (!think.open) { openThinkDock() } while (c.length) { if (!think.active) { const i = c.indexOf('<think>'); if (i === -1) { if (think.open && think.buffer.length > 0) { closeThinkDock() } break } c = c.slice(i + 7); think.active = true; streams[id] && (streams[id].thinkPhase = true) } else { const j = c.indexOf('</think>'); if (j === -1) { think.buffer += c; c = ''; break } else { think.buffer += c.slice(0, j); c = c.slice(j + 8); think.active = false; streams[id] && (streams[id].thinkPhase = false); renderThink(); if (c.trim().length > 0) { closeThinkDock() } } } } renderThink() } }
 function stripThinkTags(s) { return s.replaceAll('<think>', '').replaceAll('</think>', ''); }
@@ -23,8 +101,8 @@ function renderTeam() {
   if (teamCount) teamCount.textContent = `${agents.length} members`;
 
   if (!agents.length) {
-      teamContainer.innerHTML = '<div style="color:var(--muted); padding:16px; text-align:center; font-size:13px; border:1px dashed var(--border); border-radius:6px;">No agents in team.<br>Generate from scenario or add manually.</div>';
-      return
+    teamContainer.innerHTML = '<div style="color:var(--muted); padding:16px; text-align:center; font-size:13px; border:1px dashed var(--border); border-radius:6px;">No agents in team.<br>Generate from scenario or add manually.</div>';
+    return
   }
 
   teamContainer.innerHTML = agents.map((agent, i) => `
@@ -41,11 +119,54 @@ function renderTeam() {
   $$('.sys').forEach(el => { el.onchange = () => { agents[el.dataset.i].system = el.value; saveSession() } });
   $$('.num').forEach(el => { el.onchange = () => { agents[el.dataset.i].temperature = parseFloat(el.value || '0.3'); saveSession() } });
   $$('.rm').forEach(el => { el.onclick = () => { agents.splice(+el.dataset.i, 1); renderTeam(); saveSession() } });
-  $$('.up').forEach(el => { el.onclick = () => { const i = +el.dataset.i; if (i > 0) { [agents[i - 1], agents[i]] = [agents[i], agents[i - 1]]; renderTeam(); saveSession() } } });
-  $$('.down').forEach(el => { el.onclick = () => { const i = +el.dataset.i; if (i < agents.length - 1) { [agents[i + 1], agents[i]] = [agents[i], agents[i + 1]]; renderTeam(); saveSession() } } })
+  $$('.up').forEach(el => { el.onclick = () => { let i = +el.dataset.i; if (i > 0) { [agents[i - 1], agents[i]] = [agents[i], agents[i - 1]]; renderTeam(); saveSession() } } });
+  $$('.down').forEach(el => { el.onclick = () => { let i = +el.dataset.i; if (i < agents.length - 1) { [agents[i + 1], agents[i]] = [agents[i], agents[i + 1]]; renderTeam(); saveSession() } } })
 }
-function buttons(running) { const A = $('#actions'); if (running) { let manual = $('#mode').value === 'Manual'; A.innerHTML = `<div style='display:grid;grid-template-columns:${manual ? '1fr 1fr' : '1fr'};gap:8px'> <button id='stop' class='btn btn-danger' style="width:100%">Stop Task</button> ${manual ? "<div style='display:flex;gap:6px'><select id='manual-chooser' class='sys' style='background:var(--bg)'></select><button id='step2' class='btn btn-success'>Step</button></div>" : ""} </div>`; $('#stop').onclick = async () => { if (es) es.close(); await fetch('/stop', { method: 'POST' }); setStatus('idle'); buttons(false); addMsg('System', 'Task aborted', true); closeThinkDock() }; if (manual) { const sel = $('#manual-chooser'); sel.innerHTML = manualNames.map(n => `<option>${n}</option>`).join(''); $('#step2').onclick = () => fetch('/choose_next', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: sel.value }) }) } } else { A.innerHTML = `<button id='start' class='btn btn-primary' style='width:100%'>Start Task</button>`; $('#start').onclick = startRun } }
-async function startRun() { if (agents.length < 2) { toast('Add at least two agents to start.'); return } if (es) es.close(); $('#chat').innerHTML = ''; closeThinkDock(); streams = {}; addMsg('System', 'Task started'); setStatus('running'); buttons(true); manualNames = agents.map(a => a.name).concat(['Human_Admin']); if (graph) { graph.clear(); graph.paint() }; const payload = new URLSearchParams({ model: $('#model').value, goal: btoa($('#goal').value || ''), agents: btoa(JSON.stringify(agents)), manager_mode: $('#mode').value, turns: $('#turns').value || '', temperature: $('#temperature').value || '0.3' }); es = new EventSource('/stream?' + payload.toString()); es.onmessage = ev => { if (ev.data === '[DONE]') { es.close(); setStatus('idle'); buttons(false); addMsg('System', 'Task complete'); return } try { const d = JSON.parse(ev.data); if (d.type === 'status') { setStatus(d.state) } else if (d.type === 'chat') { addMsg(d.sender, d.message, false); if (d.graph_edge) { updateGraph(d.graph_edge) } } else if (d.type === 'stream_start') { addMsg(d.sender, '', false, d.id) } else if (d.type === 'token') { appendToken(d.id, d.delta) } else if (d.type === 'stream_end') { } } catch (e) { } }; es.onerror = () => { addMsg('Error', 'Connection lost', true); try { es.close() } catch { } setStatus('idle'); buttons(false) } }
+function buttons(running) {
+  const A = $('#actions');
+  if (running) {
+    let manual = $('#mode').value === 'Manual';
+    const manualControls = manual ? `<div style='display:flex;gap:6px'><select id='manual-chooser' class='sys' style='background:var(--bg)'></select><button id='step2' class='btn btn-success'>Step</button></div>` : "";
+
+    A.innerHTML = `
+      <div style='display:grid;grid-template-columns:${manual ? '1fr 1fr' : '1fr'};gap:8px'>
+        <button id='stop' class='btn btn-danger' style="width:100%">Stop Task</button>
+        ${manualControls}
+      </div>`;
+
+    $('#stop').onclick = async () => {
+      const btn = $('#stop');
+      btn.disabled = true;
+      btn.textContent = 'Stopping...';
+
+      if (es) es.close();
+      await fetch('/stop', { method: 'POST' });
+
+      setStatus('idle');
+      buttons(false);
+      addMsg('System', 'Task aborted', true);
+      closeThinkDock();
+    };
+
+    if (manual) {
+      const sel = $('#manual-chooser');
+      sel.innerHTML = manualNames.map(n => `<option>${n}</option>`).join('');
+      $('#step2').onclick = () => fetch('/choose_next', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          name: sel.value
+        })
+      })
+    }
+  } else {
+    A.innerHTML = `<button id='start' class='btn btn-primary' style='width:100%'>Start Task</button>`;
+    $('#start').onclick = startRun
+  }
+}
+async function startRun() { if (agents.length < 2) { toast('Add at least two agents to start.'); return } if (es) es.close(); $('#chat').innerHTML = ''; closeThinkDock(); streams = {}; addMsg('System', 'Task started'); setStatus('running'); buttons(true); manualNames = agents.map(a => a.name).concat(['Human_Admin']); if (graph) { graph.clear(); graph.paint() }; const payload = new URLSearchParams({ model: $('#model').value, goal: btoa($('#goal').value || ''), agents: btoa(JSON.stringify(agents)), manager_mode: $('#mode').value, turns: $('#turns').value || '', temperature: $('#temperature').value || '0.3' }); es = new EventSource('/stream?' + payload.toString()); es.onmessage = ev => { if (ev.data === '[DONE]') { es.close(); setStatus('idle'); buttons(false); addMsg('System', 'Task complete'); return } try { const d = JSON.parse(ev.data); if (d.type === 'status') { setStatus(d.state) } else if (d.type === 'chat') { addMsg(d.sender, d.message, false); if (d.graph_edge) { updateGraph(d.graph_edge) } } else if (d.type === 'stream_start') { addMsg(d.sender, '', false, d.id) } else if (d.type === 'token') { appendToken(d.id, d.delta) } else if (d.type === 'stream_end') { } } catch (e) { } }; es.onerror = (e) => { console.error("SSE Error:", e); addMsg('Error', 'Connection lost', true); try { es.close() } catch { } setStatus('idle'); buttons(false) } }
 function renderTreeNode(node) {
   const icon = node.type === 'file' ? '📄' : '📁'; const actions = `<div class="node-actions"><button class="rename-node" data-path="${node.path}" title="Rename">✏️</button><button class="delete-node" data-path="${node.path}" title="Delete">✕</button></div>`; const nameEl = node.type === 'file' ? `<a href="/workspace/${node.path}" target="_blank" class="node-name">${node.name}</a>` : `<span class="node-name">${node.name}</span>`; const content = `
       <div class="node" data-path="${node.path}">
@@ -158,6 +279,28 @@ function toggleCommandPalette(show) {
 
 document.addEventListener('DOMContentLoaded', () => {
   initGraph(); setupTabs();
+
+  const sidebarToggle = $('#sidebar-toggle');
+  const sidebarOverlay = $('#sidebar-overlay');
+  const sideNav = $('.side');
+
+  if (sidebarToggle && sidebarOverlay && sideNav) {
+    sidebarToggle.addEventListener('click', () => {
+      sideNav.classList.add('open');
+      sidebarOverlay.classList.add('open');
+    });
+    sidebarOverlay.addEventListener('click', () => {
+      sideNav.classList.remove('open');
+      sidebarOverlay.classList.remove('open');
+    });
+
+    // Auto-open on mobile
+    if (window.innerWidth <= 768) {
+      sideNav.classList.add('open');
+      sidebarOverlay.classList.add('open');
+    }
+  }
+
   registerCommand('view.setup', 'View: Show Setup', () => $('#tab-setup').click());
   registerCommand('view.workspace', 'View: Show Workspace', () => $('#tab-work').click());
   registerCommand('view.terminal', 'View: Show Terminal', () => $('#tab-terminal').click());
@@ -165,7 +308,7 @@ document.addEventListener('DOMContentLoaded', () => {
   registerCommand('view.playground', 'View: Show Playground', () => $('#tab-playground').click());
   registerCommand('view.settings', 'View: Show Settings', () => $('#tab-settings').click());
 
-  $('#thinkmin').onclick = () => { if (think.minimized) expandThinkDock(); else collapseThinkDock() }; $('#thinkclose').onclick = () => { closeThinkDock() }; $('#bot-add').onclick = () => { const n = $('#bot-title').value.trim(); if (!n) return; const sanitizedName = n.replace(/[^a-zA-Z0-9_]/g, '_'); agents.push({ name: sanitizedName, system: $('#bot-description').value.trim(), temperature: 0.3 }); $('#bot-title').value = ''; $('#bot-description').value = ''; renderTeam(); saveSession() }; $('#generate-agents').onclick = async () => { const scenario = $('#scenario').value.trim(); if (!scenario) { toast('Please enter a scenario description.'); return } const btn = $('#generate-agents'); btn.disabled = true; btn.textContent = 'Generating...'; try { const r = await fetch('/api/scenario/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scenario, model: $('#model').value, num_agents: $('#num-agents').value }) }); if (!r.ok) { const err = await r.json().catch(() => ({ error: 'Request failed' })); throw new Error(err.error) } const data = await r.json(); agents = data.agents; $('#goal').value = data.goal || ''; renderTeam(); toast('Agents and goal generated successfully.') } catch (e) { toast('Failed to generate agents: ' + e.message) } finally { btn.disabled = false; btn.textContent = 'Generate Team' } }; $('#fbform').onsubmit = async e => { e.preventDefault(); const v = $('#fb').value.trim(); if (!v) return; addMsg('You', v, true); await fetch('/user_input', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: v }) }); $('#fb').value = ''; setStatus('running') }; $('#upload').onclick = async () => { const f = $('#file').files[0]; if (!f) return; const fd = new FormData(); fd.append('file', f); const r = await fetch('/api/workspace/upload', { method: 'POST', body: fd }); if (!r.ok) { const e = await r.json(); toast('Upload failed: ' + (e.error || e.message)) } else { toast('Uploaded'); refreshTree() } }; $('#refresh').onclick = () => { refreshTree() }; $('#new-folder').onclick = async () => { const path = prompt('Enter the new folder name:'); if (path) { try { const r = await fetch('/api/workspace/new_folder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) }); if (!r.ok) { const err = await r.json().catch(() => ({ error: 'Request failed' })); throw new Error(err.message || err.error) } toast(`Created folder ${path}`); refreshTree() } catch (err) { toast(`Error creating folder: ${err.message}`) } } };
+  $('#thinkmin').onclick = () => { if (think.minimized) expandThinkDock(); else collapseThinkDock() }; $('#thinkclose').onclick = () => { closeThinkDock() }; $('#bot-add').onclick = () => { const n = $('#bot-title').value.trim(); if (!n) return; const sanitizedName = n.replace(/[^a-zA-Z0-9_]/g, '_'); agents.push({ name: sanitizedName, system: $('#bot-description').value.trim(), temperature: 0.3 }); $('#bot-title').value = ''; $('#bot-description').value = ''; renderTeam(); saveSession() }; $('#generate-agents').onclick = async () => { const scenario = $('#scenario').value.trim(); if (!scenario) { toast('Please enter a scenario description.'); return } const btn = $('#generate-agents'); btn.disabled = true; btn.textContent = 'Generating...'; try { const r = await fetch('/api/scenario/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scenario, model: $('#model').value, num_agents: $('#num-agents').value }) }); if (!r.ok) { const err = await r.json().catch(() => ({ error: 'Request failed' })); throw new Error(err.error) } const data = await r.json(); agents = data.agents; $('#goal').value = data.goal || ''; renderTeam(); toast('Agents and goal generated successfully.') } catch (e) { toast('Failed to generate agents: ' + e.message) } finally { btn.disabled = false; btn.textContent = 'Generate Scenario' } }; $('#fbform').onsubmit = async e => { e.preventDefault(); const v = $('#fb').value.trim(); if (!v) return; addMsg('You', v, true); await fetch('/user_input', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: v }) }); $('#fb').value = ''; setStatus('running') }; $('#upload').onclick = async () => { const f = $('#file').files[0]; if (!f) return; const fd = new FormData(); fd.append('file', f); const r = await fetch('/api/workspace/upload', { method: 'POST', body: fd }); if (!r.ok) { const e = await r.json(); toast('Upload failed: ' + (e.error || e.message)) } else { toast('Uploaded'); refreshTree() } }; $('#refresh').onclick = () => { refreshTree() }; $('#new-folder').onclick = async () => { const path = prompt('Enter the new folder name:'); if (path) { try { const r = await fetch('/api/workspace/new_folder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) }); if (!r.ok) { const err = await r.json().catch(() => ({ error: 'Request failed' })); throw new Error(err.message || err.error) } toast(`Created folder ${path}`); refreshTree() } catch (err) { toast(`Error creating folder: ${err.message}`) } } };
 
   document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'P') {

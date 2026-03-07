@@ -22,3 +22,7 @@ log.setLevel(logging.INFO)
 _handler = logging.StreamHandler(sys.stdout)
 _handler.setFormatter(JsonFormatter())
 log.addHandler(_handler)
+
+_file_handler = logging.FileHandler("debug.log", encoding="utf-8")
+_file_handler.setFormatter(JsonFormatter())
+log.addHandler(_file_handler)

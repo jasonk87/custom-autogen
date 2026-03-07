@@ -66,6 +66,10 @@ def _run_orchestrator_thread(goal, model, agents_cfg, manager_mode, out_q, max_t
         # Ensure [DONE] is sent even if an error occurs
         out_q.put("[DONE]")
 
+@app.get("/favicon.ico")
+async def favicon():
+    return "", 204
+
 @app.get("/stream")
 async def stream():
     model = request.args.get("model", DEFAULT_MODEL)
@@ -89,34 +93,55 @@ async def stream():
     thread_args = (goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy, temperature)
     state.start(_run_orchestrator_thread, thread_args)
 
-    def gen():
+    async def gen():
         last_ping = time.time()
-        while True:
-            try:
-                item = out_q.get(timeout=0.5)
-                yield f"data: {item}\n\n"
-                if item == "[DONE]":
-                    break
-            except queue.Empty:
-                if time.time() - last_ping > 10:
-                    yield ": ping\n\n"
+        log.info("stream_started", extra={"model": model, "goal_len": len(goal)})
+        try:
+            while True:
+                try:
+                    # Reduced timeout for more responsive pings
+                    # Use asyncio.to_thread to prevent blocking the event loop
+                    item = await asyncio.to_thread(out_q.get, True, 2.0)
+                    yield f"data: {item}\n\n"
+                    # Reset ping timer on ANY successful data send
                     last_ping = time.time()
+                    
+                    if item == "[DONE]":
+                        log.info("stream_finished_cleanly")
+                        break
+                except queue.Empty:
+                    # If we haven't sent anything in > 2 seconds, send a ping
+                    now = time.time()
+                    if now - last_ping > 2.0:
+                        yield ": ping\n\n"
+                        last_ping = now
+                except Exception as e:
+                    log.error("generator_loop_error", error=str(e))
+                    break
+        except GeneratorExit:
+            log.info("stream_client_disconnected")
+        except Exception as e:
+            log.error("stream_error", error=str(e))
+            yield f"data: {json.dumps({'type': 'status', 'state': 'error', 'message': str(e)})}\n\n"
+            
     headers = {
+        "Content-Type": "text/event-stream; charset=utf-8",
         "Cache-Control": "no-cache, no-transform",
-        "Content-Type": "text/event-stream",
         "Connection": "keep-alive",
-        "X-Accel-Buffering": "no",
+        "X-Accel-Buffering": "no", # Nginx no buffering
     }
     return Response(gen(), headers=headers)
 
 @app.post("/stop")
-def stop():
+async def stop():
     state.stop()
     return jsonify({"ok": True})
 
 @app.post("/user_input")
-def user_input():
-    msg = (request.json or {}).get("message")
+async def user_input():
+    # FIXED: converted to async and used await request.get_json()
+    data = await request.get_json()
+    msg = (data or {}).get("message")
     try:
         state.user_input_q.put_nowait(msg)
     except Exception:
@@ -140,8 +165,10 @@ async def scenario_generate():
         return jsonify({"error": str(e)}), 500
 
 @app.post("/choose_next")
-def choose_next():
-    name = (request.json or {}).get("name")
+async def choose_next():
+    # FIXED: converted to async and used await request.get_json()
+    data = await request.get_json()
+    name = (data or {}).get("name")
     try:
         state.manual_next_q.put_nowait(name)
     except Exception:
@@ -149,17 +176,16 @@ def choose_next():
     return jsonify({"ok": True})
 
 @app.post("/api/settings/ollama")
-def set_ollama():
-    # Deprecated/Removed for Gemini switch, but keeping a stub to avoid frontend breaking if it calls it
+async def set_ollama():
     return jsonify({"ok": True, "message": "Ollama support has been replaced with Gemini."})
 
 @app.get("/api/models")
-def api_models():
+async def api_models():
     # Hardcoded list of Gemini models
     return jsonify(["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.0-pro"])
 
 @app.get("/api/tools")
-def api_tools():
+async def api_tools():
     """Returns a list of available tools."""
     tool_list = []
     for name, func in TOOLS.items():
@@ -196,6 +222,7 @@ async def api_agent_run():
             name=agent_config.get("name", "playground_agent"),
             model_client=gemini_client,
             system_message=agent_config.get("system_message", "You are a helpful assistant."),
+            model_client_stream=False,
             tools=selected_tools,
         )
 
@@ -210,9 +237,6 @@ async def api_agent_run():
         async for event in team.run_stream(task=message):
             final = event
 
-        # We need to extract the response. The final event is likely the last message?
-        # But run_stream yields events.
-        # final might be the last event.
         reply = "No response."
         if final and hasattr(final, "messages") and final.messages:
              reply = final.messages[-1].content
@@ -225,7 +249,7 @@ async def api_agent_run():
         return jsonify({"error": "agent_run_failed", "message": str(e)}), 500
 
 @app.get("/api/workspace/files")
-def api_files_flat():
+async def api_files_flat():
     out = []
     for item in os.listdir(WORKSPACE_DIR):
         p = os.path.join(WORKSPACE_DIR, item)
@@ -234,27 +258,40 @@ def api_files_flat():
     return jsonify(out)
 
 @app.get("/api/workspace/tree")
-def api_files_tree():
+async def api_files_tree():
     return jsonify(tree_listing("."))
 
 @app.post("/api/workspace/upload")
-def api_upload():
-    f = request.files.get("file")
+async def api_upload():
+    # FIXED: converted to async and used await request.files
+    files = await request.files
+    f = files.get("file")
     if not f:
         return jsonify({"error": "missing file"}), 400
-    f.stream.seek(0, io.SEEK_END)
-    size = f.stream.tell()
-    f.stream.seek(0)
+    
+    # In Quart, f.stream might be async or require read(). 
+    # Usually f.save() works if we are within quart context.
+    # However, f is a FileStorage object.
+    
+    # Safer way in Quart:
+    blob = f.read()
+    size = len(blob)
+    
     if size > MAX_UPLOAD_BYTES:
         return jsonify({"error": "too_large", "max": MAX_UPLOAD_BYTES}), 413
+    
     mime = f.mimetype or "application/octet-stream"
     if mime not in ALLOWED_UPLOAD_MIMES:
         if not secure_filename(f.filename).endswith((".txt", ".md", ".json", ".py")):
             return jsonify({"error": "mime_blocked", "mime": mime}), 415
+            
     fn = secure_filename(f.filename)
     fp = os.path.join(WORKSPACE_DIR, fn)
     os.makedirs(os.path.dirname(fp), exist_ok=True)
-    f.save(fp)
+    
+    with open(fp, "wb") as dest:
+        dest.write(blob)
+        
     return jsonify({"ok": True, "file": fn, "bytes": size})
 
 @app.get("/workspace/<path:fn>")
@@ -268,7 +305,6 @@ async def api_delete_file():
     if not path:
         return jsonify({"error": "missing_path"}), 400
 
-    # Security: Ensure the path is within the workspace directory
     base_path = os.path.abspath(WORKSPACE_DIR)
     target_path = os.path.abspath(os.path.join(base_path, path))
 
@@ -277,7 +313,6 @@ async def api_delete_file():
 
     try:
         if os.path.isdir(target_path):
-            # This will only remove empty directories, which is a safe default
             os.rmdir(target_path)
         else:
             os.remove(target_path)
@@ -294,7 +329,6 @@ async def api_new_folder():
     if not path:
         return jsonify({"error": "missing_path"}), 400
 
-    # Security: Ensure the path is within the workspace directory
     base_path = os.path.abspath(WORKSPACE_DIR)
     target_path = os.path.abspath(os.path.join(base_path, path))
 
@@ -315,7 +349,6 @@ async def api_save_file():
     if path is None or content is None:
         return jsonify({"error": "missing_path_or_content"}), 400
 
-    # Security: Ensure the path is within the workspace directory
     base_path = os.path.abspath(WORKSPACE_DIR)
     target_path = os.path.abspath(os.path.join(base_path, path))
 
@@ -335,7 +368,6 @@ async def api_get_file():
     if not path:
         return jsonify({"error": "missing_path"}), 400
 
-    # Security: Ensure the path is within the workspace directory
     base_path = os.path.abspath(WORKSPACE_DIR)
     target_path = os.path.abspath(os.path.join(base_path, path))
 
@@ -359,11 +391,8 @@ async def api_rename_file():
     if not old_path or not new_path:
         return jsonify({"error": "missing_path"}), 400
 
-    # Security: Ensure the paths are within the workspace directory
     base_path = os.path.abspath(WORKSPACE_DIR)
-
     old_target_path = os.path.abspath(os.path.join(base_path, old_path))
-    # For the new path, we need to resolve the directory part and then join the new name
     new_path_dir = os.path.dirname(os.path.join(base_path, new_path))
     new_target_path = os.path.abspath(os.path.join(new_path_dir, os.path.basename(new_path)))
 
@@ -379,11 +408,11 @@ async def api_rename_file():
         return jsonify({"error": "os_error", "message": str(e)}), 500
 
 @app.get("/api/sessions")
-def sessions_list():
+async def sessions_list():
     return jsonify(sorted([f for f in os.listdir(SESSIONS_DIR) if f.endswith(".json")]))
 
 @app.get("/api/sessions/<path:name>")
-def sessions_get(name: str):
+async def sessions_get(name: str):
     fp = os.path.join(SESSIONS_DIR, name)
     if not os.path.exists(fp):
         return jsonify({"error": "not_found"}), 404
@@ -391,8 +420,10 @@ def sessions_get(name: str):
         return jsonify(json.load(f))
 
 @app.post("/api/sessions")
-def sessions_save():
-    data = request.json or {}
+async def sessions_save():
+    # FIXED: converted to async and used await request.get_json()
+    data = await request.get_json()
+    data = data or {}
     name = data.get("name")
     if not name:
         return jsonify({"error": "missing_name"}), 400
@@ -402,7 +433,7 @@ def sessions_save():
     return jsonify({"ok": True, "file": fp}), 201
 
 @app.delete("/api/sessions/<path:name>")
-def sessions_delete(name: str):
+async def sessions_delete(name: str):
     fp = os.path.join(SESSIONS_DIR, name)
     if not os.path.exists(fp):
         return jsonify({"error": "not_found"}), 404
@@ -410,8 +441,10 @@ def sessions_delete(name: str):
     return jsonify({"ok": True})
 
 @app.post("/api/transcript/md")
-def export_md():
-    payload = request.json or {}
+async def export_md():
+    # FIXED: converted to async and used await request.get_json()
+    payload = await request.get_json()
+    payload = payload or {}
     transcript = payload.get("transcript") or []
     lines = ["# Transcript", ""]
     for item in transcript:
@@ -432,8 +465,10 @@ def export_md():
     return jsonify({"ok": True, "file": f"/workspace/{fn}"})
 
 @app.post("/api/transcript/html")
-def export_html():
-    payload = request.json or {}
+async def export_html():
+    # FIXED: converted to async and used await request.get_json()
+    payload = await request.get_json()
+    payload = payload or {}
     transcript = payload.get("transcript") or []
     parts = [
         "<!doctype html><meta charset='utf-8'><title>Transcript</title>",
@@ -458,7 +493,15 @@ async def ws_terminal():
 
     # Check if pty is available
     if not pty:
-        await websocket.send("Error: pty not available on this system.")
+        msg = (
+            "\r\n"
+            "   \u26a0\ufe0f  Pseudo-terminal (PTY) is not available on Windows.\r\n"
+            "      Local workspace commands cannot be run interactively here.\r\n"
+            "\r\n"
+            "      Tip: You can still manage files in the 'Workspace' tab\r\n"
+            "      or run scripts via the agent's 'Setup' if they use tools.\r\n"
+        )
+        await websocket.send(msg)
         return
 
     # Create a child process attached to a pseudo-terminal

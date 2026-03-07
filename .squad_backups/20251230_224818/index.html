@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Custom Agent Studio — v10</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+  <link rel="stylesheet" href="/static/css/style.css">
+  <style>
+    /* Critical inline overrides or dynamic styles can go here if absolutely necessary,
+       but otherwise we rely on style.css */
+  </style>
+  <script src="https://unpkg.com/@antv/g6@4.8.24/dist/g6.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/xterm/5.3.0/xterm.min.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xterm/5.3.0/xterm.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xterm-addon-fit/0.8.0/xterm-addon-fit.min.js"></script>
+  <!-- CodeMirror -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/python/python.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/javascript/javascript.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/css/css.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/htmlmixed/htmlmixed.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/xml/xml.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/theme/dracula.min.css" />
+</head>
+
+<body>
+  <div class="app">
+    <!-- Backdrop for mobile sidebar -->
+    <div id="backdrop" class="backdrop hidden"></div>
+    <!-- Permanent Mobile Header -->
+    <div class="mobile-header-fixed">
+      <div style="display:flex;align-items:center;gap:12px">
+        <button class="mobile-hamburger" id="nav-toggle">☰</button>
+        <h1>Agent Studio</h1>
+      </div>
+    </div>
+
+    <aside class="side">
+      <header>
+        <div style="display:flex;align-items:center;gap:10px">
+          <h1 style="display:none; /* Hidden on desktop side since we have mobile header? No, keep desktop standard */">
+            Custom Agent Studio</h1>
+          <span style="font-weight:700;font-size:16px" class="desktop-only">Agent Studio</span>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button id="new-chat" class="btn btn-primary" style="padding:4px 10px;font-size:12px">+ New</button>
+        </div>
+      </header>
+
+      <div class="tabs">
+        <button id="tab-setup" class="tab active">Setup</button>
+        <button id="tab-sessions" class="tab">Sessions</button>
+        <button id="tab-work" class="tab">Files</button>
+        <button id="tab-terminal" class="tab">Term</button>
+        <button id="tab-graph" class="tab">Graph</button>
+        <button id="tab-playground" class="tab">Play</button>
+        <button id="tab-settings" class="tab">Set</button>
+      </div>
+
+      <!-- SESSIONS LIST TAB -->
+      <div id="sessions-view" class="hidden" style="flex:1;overflow-y:auto;padding:12px">
+        <div id="session-list"></div>
+      </div>
+
+      <section id="setup">
+        <div class="row">
+          <div class="group">
+            <label>Execution Strategy</label>
+            <select id="mode">
+              <option>Auto</option>
+              <option>RoundRobin</option>
+              <option>Manual</option>
+            </select>
+          </div>
+          <div class="group">
+            <label>Max Turns</label>
+            <input id="turns" type="number" min="1" max="200" value="60" />
+          </div>
+        </div>
+        <div class="row">
+          <div class="group">
+            <label>Team Temperature</label>
+            <input id="temperature" type="number" min="0" max="2" step="0.1" value="0.3" />
+          </div>
+          <div class="group" id="autonomous-user-container"
+            style="display:flex; flex-direction:column; justify-content:flex-end; padding-bottom:4px;">
+            <label style="display:flex;align-items:center;cursor:pointer;gap:10px">
+              <div class="switch">
+                <input type="checkbox" id="autonomous-user" />
+                <span class="slider"></span>
+              </div>
+              <div style="font-weight:600;font-size:13px">Autonomous User</div>
+            </label>
+
+          </div>
+        </div>
+
+        <!-- Mode Toggle -->
+        <div class="group" style="margin-top:20px; margin-bottom: 10px;">
+          <label>Team Composition Method</label>
+          <div class="segmented-control">
+            <button id="btn-mode-scenario" class="segment active">Scenario</button>
+            <button id="btn-mode-manual" class="segment">Manual</button>
+          </div>
+        </div>
+
+        <!-- Scenario Mode Input -->
+        <div id="mode-scenario-container">
+          <div class="card">
+            <div style="font-weight:700;margin-bottom:6px">Describe Scenario</div>
+            <textarea id="scenario"
+              placeholder="Describe a scenario, e.g. 'two presidents debating climate change' or 'a team of developers building a web app'"></textarea>
+            <div class="row" style="margin-top:6px; align-items:center;">
+              <div class="group" style="margin:0;">
+                <label>Number of Agents</label>
+                <input id="num-agents" type="number" min="2" max="10" value="3" />
+              </div>
+              <button id="generate-agents" class="btn btn-primary">Generate Team</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Manual Mode Input -->
+        <div id="mode-manual-container" class="hidden">
+          <div class="card" id="add-bot-card">
+            <div style="font-weight:700;margin-bottom:6px">Add Agent Manually</div>
+            <input id="bot-title" placeholder="Agent Name (e.g. Python_Expert)" style="margin-bottom:6px" />
+            <label for="bot-description">System Message (optional)</label>
+            <textarea id="bot-description" placeholder="You are a helpful assistant..."
+              style="min-height:50px; margin-bottom:6px;"></textarea>
+            <div style="display:flex;justify-content:flex-end;">
+              <button id="bot-add" class="btn btn-primary">Add Agent</button>
+            </div>
+          </div>
+
+          <div class="group" style="margin-top:20px">
+            <label>Team Goal</label>
+            <textarea id="goal" placeholder="e.g. Build a Flask app and write files to workspace"></textarea>
+          </div>
+        </div>
+
+
+        <div class="group">
+          <div style="font-weight:700;margin-bottom:6px">Current Team</div>
+          <div id="team"></div>
+        </div>
+        <div class="group" id="actions"></div>
+        <div class="group">
+          <button id="export" class="btn btn-neutral" style="width:100%">Export Transcript</button>
+        </div>
+      </section>
+
+      <section id="work" class="hidden"
+        style="display:flex; flex-direction:column; height:100% !important; padding:0; background:#0b1220;">
+        <div style="display:flex; flex:1; overflow:hidden;">
+          <!-- File Tree Sidebar -->
+          <div
+            style="width:250px; min-width:250px; background:#0f172a; border-right:1px solid #334151; display:flex; flex-direction:column;">
+
+            <div
+              style="padding:10px 14px; border-bottom:1px solid #334151; display:flex; align-items:center; justify-content:space-between; background:#1e293b">
+              <span style="font-weight:600; font-size:11px; color:#94a3b8; letter-spacing:0.5px">WORKSPACE</span>
+              <div style="display:flex; gap:6px">
+                <button class="icon-btn" onclick="showCreateInput('file')" title="New File">📄</button>
+                <button class="icon-btn" onclick="showCreateInput('folder')" title="New Folder">📂</button>
+                <button class="icon-btn" onclick="refreshTree()" title="Refresh">↻</button>
+                <label class="icon-btn" title="Upload File" style="cursor:pointer">
+                  ⬆<input id="upload-input" type="file" style="display:none" onchange="window.handleUpload(this)" />
+                </label>
+              </div>
+            </div>
+
+            <div class="tree" id="tree" style="flex:1; overflow:auto; padding:10px;"></div>
+          </div>
+
+          <!-- Editor Area -->
+          <div style="flex:1; display:flex; flex-direction:column; background:#1e1e1e; overflow:hidden">
+            <div id="editor-header"
+              style="height:40px; background:#1f2937; border-bottom:1px solid #374151; display:flex; align-items:center; padding:0 10px; justify-content:space-between;">
+              <span id="current-file" style="font-weight:600; color:#e5e7eb; font-size:13px;">No file selected</span>
+              <div style="display:flex; gap:8px">
+                <button id="run-file" class="btn btn-success" style="padding:4px 12px; font-size:12px;" disabled>▶
+                  Run</button>
+                <button id="save-file" class="btn btn-primary" style="padding:4px 12px; font-size:12px;"
+                  disabled>Save</button>
+              </div>
+            </div>
+            <!-- Relative container for CodeMirror absolutely positioned elements -->
+            <div id="editor-container" style="position:relative; flex:1; overflow:hidden;"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="terminal" class="hidden">
+        <div id="terminal-container" style="width:100%; height:100%"></div>
+      </section>
+
+      <section id="graph" class="hidden">
+        <div id="graph-container"
+          style="width: 100%; height: 500px; background: #111827; border: 1px solid #334155; border-radius: 8px;"></div>
+      </section>
+
+      <section id="playground" class="hidden">
+        <div class="group">
+          <label>Agent Name</label>
+          <input id="playground-agent-name" value="MyAgent" />
+        </div>
+        <div class="group">
+          <label>System Message</label>
+          <textarea id="playground-system-message"
+            placeholder="e.g., You are a helpful assistant.">You are a helpful assistant.</textarea>
+        </div>
+        <div class="group">
+          <label>Tools</label>
+          <div id="playground-tools" style="display: flex; flex-wrap: wrap; gap: 6px;"></div>
+        </div>
+        <div id="playground-chat-area"
+          style="flex: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-top: 10px; min-height: 200px;">
+        </div>
+        <form id="playground-form" style="display: flex; gap: 8px; margin-top: 10px;">
+          <input id="playground-input" placeholder="Talk to your agent..." />
+          <button id="playground-send" class="btn btn-primary">Send</button>
+        </form>
+      </section>
+
+      <section id="settings" class="hidden">
+        <div class="group">
+          <label>Ollama Model <span id="model-count" class="pill"></span></label>
+          <div class="row2">
+            <select id="model"></select>
+            <button id="reloadModels" class="btn btn-neutral">Reload</button>
+          </div>
+          <div id="model-hint" style="color:#9ca3af;font-size:12px;margin-top:4px"></div>
+        </div>
+        <div class="group">
+          <label>Default Temperature</label>
+          <input id="default-temp" type="number" min="0" max="2" step="0.1" value="0.3" />
+        </div>
+        <div class="group">
+          <label>Ollama Base URL</label>
+          <div class="row2">
+            <input id="ollamaBase" value="http://192.168.86.30:11434" />
+            <button id="saveBase" class="btn btn-primary">Save</button>
+          </div>
+          <div id="baseHint" style="color:#9ca3af;font-size:12px;margin-top:4px">Example: http://192.168.86.30:11434
+          </div>
+        </div>
+        <div class="group">
+          <button id="probe" class="btn btn-neutral">Probe Ollama</button>
+          <span id="probeHint" style="margin-left:8px;color:#9ca3af"></span>
+        </div>
+      </section>
+    </aside>
+
+    <main class="main">
+      <!-- Floating menu toggle removed -->
+
+      <div id="chat"></div>
+
+      <!-- Thinking Dock -->
+      <div id="thinkdock">
+        <div id="thinkhdr">
+          <span class="title">Thinking</span>
+          <div style="display:flex;gap:6px;align-items:center">
+            <span id="thinklen" class="chip">0 chars</span>
+            <button id="thinkmin">Minimize</button>
+            <button id="thinkclose">Close</button>
+          </div>
+        </div>
+        <div id="thinkbody"></div>
+      </div>
+
+      <div id="status">Status: Idle</div>
+      <form id="fbform">
+        <input id="fb" placeholder="Type real-time feedback or ```python code```…" disabled />
+        <button id="send" class="btn btn-primary" disabled>Send</button>
+      </form>
+    </main>
+  </div>
+
+  <!-- Sessions Modal -->
+  <div id="sessions-modal"
+    style="display:none; position:fixed; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1000; align-items:center; justify-content:center;">
+    <div
+      style="background:var(--panel); padding:20px; border-radius:12px; width:min(90%, 500px); border:1px solid var(--border);">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+        <h2 style="margin:0; font-size:18px;">Manage Sessions</h2>
+        <button id="sessions-close" class="btn btn-neutral">✕</button>
+      </div>
+      <div id="sessions-list" style="margin-bottom:15px; max-height:200px; overflow-y:auto;"></div>
+      <div class="group">
+        <label>Save Current Session As</label>
+        <div class="row2">
+          <input id="session-name" placeholder="New session name..." />
+          <button id="session-save" class="btn btn-primary">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="command-palette"
+    style="display: none; position: fixed; top: 20%; left: 50%; transform: translateX(-50%); z-index: 1000; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 5px 15px rgba(0,0,0,0.3); width: 500px; padding: 12px;">
+    <input id="command-input" type="text" placeholder="Type a command"
+      style="width: 100%; padding: 10px; margin-bottom: 10px; background: #111827; border: 1px solid var(--border); border-radius: 6px; color: var(--text);">
+    <ul id="command-list" style="list-style: none; padding: 0; margin: 0; max-height: 300px; overflow-y: auto;">
+      <!-- Commands will be populated here -->
+    </ul>
+  </div>
+  <script src="/static/js/main.js"></script>
+</body>
+
+</html>

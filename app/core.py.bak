@@ -13,28 +13,7 @@ from autogen_core import CancellationToken
 from app.config import GEMINI_API_KEY, DEFAULT_MODEL
 from app.state import state
 from app.tools import TOOLS
-from app.tools import TOOLS
 from app import log
-
-class SafeOpenAIChatCompletionClient(OpenAIChatCompletionClient):
-    """
-    A wrapper around OpenAIChatCompletionClient to handle specific crashes 
-    caused by the Gemini API returning empty choices (likely due to invalid API key).
-    """
-    async def create(self, messages, **kwargs):
-        try:
-            return await super().create(messages, **kwargs)
-        except TypeError as e:
-            # Catch the specific crash happening in autogen_ext
-            if "'NoneType' object is not subscriptable" in str(e):
-                log.error("gemini_api_crash", extra={"reason": "Received empty choices from API"})
-                raise RuntimeError(
-                    "Gemini API Error: The model returned an empty response. "
-                    "This usually indicates a SAFETY FILTER trigger (refusal to generate) or an INVALID API KEY. "
-                    "If your key is valid, try adjusting your prompt or system instructions."
-                ) from e
-            raise
-
 
 def _create_graph_payload(message: Any, groupchat: SelectorGroupChat, current_speaker: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Creates a payload for the frontend, including graph data if applicable."""
@@ -119,8 +98,7 @@ async def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any
     try:
         # 1. Create model client
         model_name = model or DEFAULT_MODEL
-        model_name = model or DEFAULT_MODEL
-        gemini_client = SafeOpenAIChatCompletionClient(
+        gemini_client = OpenAIChatCompletionClient(
             model=model_name,
             api_key=GEMINI_API_KEY,
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
@@ -128,26 +106,9 @@ async def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any
         )
 
         participants = []
-        
-        # Normalize manager_mode
-        manager_mode = manager_mode.lower()
 
         # 2. Define Input Function for UserProxy
         async def input_func(prompt: str = "", cancellation_token: Optional[CancellationToken] = None) -> str:
-            # If in Auto mode and not strictly forcing human proxy, check if we have input.
-            # If no input is queued, we auto-proceed to avoid blocking or timeout.
-            if manager_mode == "auto" and not human_proxy:
-                try:
-                    # Check for immediate input
-                    user_input = state.user_input_q.get_nowait()
-                    return user_input
-                except queue.Empty:
-                    # No input waiting? Auto-reply "Approved" so the chat continues.
-                    # This prevents the socket timeout and "waiting for input" state.
-                    # Throttle the auto-reply to prevent flooding
-                    await asyncio.sleep(1.0)
-                    return "Approved"
-
             out_q.put(json.dumps({"type": "status", "state": "waiting_for_input"}))
             while True:
                 if state.stop_event.is_set():
@@ -186,7 +147,7 @@ async def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any
 
         # 3. Create selector function
         selector_func = None
-        if manager_mode == "round_robin" or manager_mode == "roundrobin":
+        if manager_mode == "round_robin":
             class RoundRobinSelector:
                 def __init__(self, participants):
                     self.participants = participants

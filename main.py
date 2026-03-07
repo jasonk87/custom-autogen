@@ -9,7 +9,7 @@ Run:
   python main.py
 
 Open:
-  http://127.0.0.1:8080
+  http://127.0.0.1:5000
 """
 
 import signal
@@ -40,8 +40,8 @@ def _shutdown(*_args):
 
 
 if __name__ == "__main__":
-    log.info("starting_server", extra={"extra": {"host": "0.0.0.0", "port": 8080}})
-    print("Starting Custom Agent Studio — v10 (Refactored) — http://127.0.0.1:8080")
+    log.info("starting_server", extra={"extra": {"host": "0.0.0.0", "port": 5000}})
+    print("Starting Custom Agent Studio — v10 (Refactored) — http://127.0.0.1:5000")
 
     # Register shutdown signals
     signal.signal(signal.SIGINT, _shutdown)
@@ -49,5 +49,6 @@ if __name__ == "__main__":
 
     # Create and run the server with hypercorn
     config = Config()
-    config.bind = ["0.0.0.0:8080"]
+    config.bind = ["0.0.0.0:5000"]
+    config.keep_alive_timeout = 120
     asyncio.run(serve(app, config))
