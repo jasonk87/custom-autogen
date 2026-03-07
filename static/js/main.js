@@ -1,7 +1,7 @@
-let $ = (s) => document.querySelector(s); let $$ = (s) => Array.from(document.querySelectorAll(s));
-let agents = []; let streams = {}; let es = null; let manualNames = []; let lastModels = []; let term = null; let ws = null;
+let $ = (s) => document.querySelector(s);
+let $$ = (s) => Array.from(document.querySelectorAll(s));
+let agents = []; let streams = {}; let es = null; let manualNames = [];
 const think = { active: false, buffer: '', open: false, minimized: false };
-let graph = null;
 const commands = [];
 let commandPaletteOpen = false;
 
@@ -9,369 +9,284 @@ function toast(msg) {
   const t = document.createElement('div');
   t.textContent = msg;
   t.style.cssText = `
-    position: fixed;
-    right: 32px;
-    bottom: 32px;
-    background: var(--glass-solid);
-    color: var(--text);
-    border: 1px solid var(--primary);
-    padding: 14px 24px;
-    border-radius: 12px;
-    box-shadow: 0 10px 40px rgba(0,0,0,0.5), 0 0 10px var(--primary-glow);
-    font-size: 14px;
-    z-index: 10000;
-    font-weight: 600;
-    backdrop-filter: blur(12px);
-    animation: messageIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    position: fixed; right: 32px; bottom: 32px; background: var(--glass-solid); color: var(--text); border: 1px solid var(--primary); padding: 14px 24px; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.5), 0 0 10px var(--primary-glow); font-size: 14px; z-index: 10000; font-weight: 600; backdrop-filter: blur(12px); animation: messageIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
   `;
   document.body.appendChild(t);
   setTimeout(() => {
-    t.style.opacity = '0';
-    t.style.transform = 'translateY(10px)';
-    t.style.transition = 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)';
+    t.style.opacity = '0'; t.style.transform = 'translateY(10px)'; t.style.transition = 'all 0.4s ease';
     setTimeout(() => t.remove(), 400);
   }, 3000);
 }
 
 function setStatus(state) {
   const S = $('#status');
-  const map = {
-    idle: 'Status: Idle',
-    running: 'Status: Agents working…',
-    waiting_for_input: 'Status: Waiting for input…'
-  };
+  if (!S) return;
+  const map = { idle: 'Status: Idle', running: 'Status: Agents working…', waiting_for_input: 'Status: Waiting for input…' };
   S.textContent = map[state] || 'Status';
-
-  // Add a pulsing effect when agents are working
-  if (state === 'running') S.classList.add('pulse');
-  else S.classList.remove('pulse');
-
-  $('#fb').disabled = state !== 'waiting_for_input';
-  $('#send').disabled = state !== 'waiting_for_input';
-  if (state === 'waiting_for_input') {
-    $('#fb').focus();
-  }
+  if (state === 'running') S.classList.add('pulse'); else S.classList.remove('pulse');
+  const fb = $('#fb'); const send = $('#send');
+  if (fb) fb.disabled = state !== 'waiting_for_input';
+  if (send) send.disabled = state !== 'waiting_for_input';
+  if (state === 'waiting_for_input' && fb) fb.focus();
 }
-let addMsg = function (sender, text, mine = false, id = null) {
+
+function addMsg(sender, text, mine = false, id = null) {
+  window.__transcript = (window.__transcript || []).concat([{ t: Date.now(), from: sender, text }]);
+  const chat = $('#chat');
+  if (!chat) return;
   const box = document.createElement('div');
   box.className = 'bubble ' + (mine ? 'from-you' : 'from-them');
-  const who = document.createElement('div');
-  who.className = 'who';
-  who.textContent = mine ? 'YOU' : sender;
-
-  // Add an avatar-like icon based on sender
-  const icon = document.createElement('span');
-  icon.style.marginRight = '8px';
-  icon.textContent = mine ? '👤' : (sender === 'System' ? '⚙️' : (sender === 'Error' ? '⚠️' : '🤖'));
-  who.prepend(icon);
-
+  const who = document.createElement('div'); who.className = 'who'; who.textContent = mine ? 'YOU' : sender;
   const body = document.createElement('div');
-  // Use marked if available
-  if (window.marked && text) {
-    body.innerHTML = window.marked.parse(text);
-  } else {
-    body.textContent = text || '';
-  }
+  if (window.marked && text) body.innerHTML = window.marked.parse(text); else body.textContent = text || '';
   box.append(who, body);
-
-  // Smart Scroll: Only auto-scroll if user is already at the bottom
-  const chat = $('#chat');
   const isAtBottom = chat.scrollHeight - chat.scrollTop - chat.clientHeight < 50;
-
   chat.append(box);
-
-  if (isAtBottom) {
-    chat.scrollTop = chat.scrollHeight;
-  }
-
+  if (isAtBottom) chat.scrollTop = chat.scrollHeight;
   if (id) streams[id] = { el: body, thinkPhase: false };
 }
-function appendToken(id, delta) { ensureThinkHandling(id, delta); const s = streams[id]; if (!s) { addMsg('assistant', '', false, id); } const body = streams[id].el; if (!streams[id].thinkPhase) { body.textContent += stripThinkTags(delta); } $('#chat').scrollTop = $('#chat').scrollHeight; }
-function ensureThinkHandling(id, chunk) { let c = chunk; if (c.includes('<think>') || think.active) { if (!think.open) { openThinkDock() } while (c.length) { if (!think.active) { const i = c.indexOf('<think>'); if (i === -1) { if (think.open && think.buffer.length > 0) { closeThinkDock() } break } c = c.slice(i + 7); think.active = true; streams[id] && (streams[id].thinkPhase = true) } else { const j = c.indexOf('</think>'); if (j === -1) { think.buffer += c; c = ''; break } else { think.buffer += c.slice(0, j); c = c.slice(j + 8); think.active = false; streams[id] && (streams[id].thinkPhase = false); renderThink(); if (c.trim().length > 0) { closeThinkDock() } } } } renderThink() } }
-function stripThinkTags(s) { return s.replaceAll('<think>', '').replaceAll('</think>', ''); }
-function openThinkDock() { if (think.open) return; think.open = true; think.minimized = false; $('#thinkdock').style.display = 'block'; renderThink(); }
-function collapseThinkDock() { if (!think.open) return; think.minimized = true; $('#thinkbody').style.display = 'none'; $('#thinkmin').textContent = 'Expand'; }
-function expandThinkDock() { if (!think.open) return; think.minimized = false; $('#thinkbody').style.display = 'block'; $('#thinkmin').textContent = 'Minimize'; }
-function closeThinkDock() { think.open = false; think.active = false; think.buffer = ''; $('#thinkdock').style.display = 'none'; renderThink(); }
-function renderThink() { if (!think.open) { return } const body = $('#thinkbody'); body.textContent = think.buffer || ''; $('#thinklen').textContent = (think.buffer || '').length + ' chars'; if (think.minimized) { body.style.display = 'none' } else { body.style.display = 'block' } }
-function renderTeam() {
-  const teamContainer = $('#team');
-  const teamCount = $('#team-count');
 
-  if (teamCount) teamCount.textContent = `${agents.length} members`;
-
-  if (!agents.length) {
-    teamContainer.innerHTML = '<div style="color:var(--muted); padding:16px; text-align:center; font-size:13px; border:1px dashed var(--border); border-radius:6px;">No agents in team.<br>Generate from scenario or add manually.</div>';
-    return
-  }
-
-  teamContainer.innerHTML = agents.map((agent, i) => `
-      <div class='team-item'>
-        <input data-i='${i}' class='name' value='${agent.name}' style='width:100px; font-weight:600;' />
-        <input data-i='${i}' class='sys' value='${agent.system || ""}' placeholder='system message' style="flex:1" />
-        <input data-i='${i}' class='num' type='number' step='0.1' min='0' max='2' value='${agent.temperature ?? 0.3}' style="width:50px" title="Temperature" />
-        <button data-i='${i}' class='btn btn-neutral up' title="Move Up">▲</button>
-        <button data-i='${i}' class='btn btn-neutral down' title="Move Down">▼</button>
-        <button data-i='${i}' class='btn btn-danger rm' title="Remove">✕</button>
-      </div>`).join('');
-
-  $$('.name').forEach(el => { el.onchange = () => { agents[el.dataset.i].name = el.value; saveSession() } });
-  $$('.sys').forEach(el => { el.onchange = () => { agents[el.dataset.i].system = el.value; saveSession() } });
-  $$('.num').forEach(el => { el.onchange = () => { agents[el.dataset.i].temperature = parseFloat(el.value || '0.3'); saveSession() } });
-  $$('.rm').forEach(el => { el.onclick = () => { agents.splice(+el.dataset.i, 1); renderTeam(); saveSession() } });
-  $$('.up').forEach(el => { el.onclick = () => { let i = +el.dataset.i; if (i > 0) { [agents[i - 1], agents[i]] = [agents[i], agents[i - 1]]; renderTeam(); saveSession() } } });
-  $$('.down').forEach(el => { el.onclick = () => { let i = +el.dataset.i; if (i < agents.length - 1) { [agents[i + 1], agents[i]] = [agents[i], agents[i + 1]]; renderTeam(); saveSession() } } })
+function appendToken(id, delta) {
+  ensureThinkHandling(id, delta);
+  const s = streams[id]; if (!s) { addMsg('assistant', '', false, id); }
+  const body = streams[id].el; if (!streams[id].thinkPhase) body.innerHTML += delta.replaceAll('\n', '<br>');
+  $('#chat').scrollTop = $('#chat').scrollHeight;
 }
-function buttons(running) {
-  const A = $('#actions');
-  if (running) {
-    let manual = $('#mode').value === 'Manual';
-    const manualControls = manual ? `<div style='display:flex;gap:6px'><select id='manual-chooser' class='sys' style='background:var(--bg)'></select><button id='step2' class='btn btn-success'>Step</button></div>` : "";
 
-    A.innerHTML = `
-      <div style='display:grid;grid-template-columns:${manual ? '1fr 1fr' : '1fr'};gap:8px'>
-        <button id='stop' class='btn btn-danger' style="width:100%">Stop Task</button>
-        ${manualControls}
-      </div>`;
-
-    $('#stop').onclick = async () => {
-      const btn = $('#stop');
-      btn.disabled = true;
-      btn.textContent = 'Stopping...';
-
-      if (es) es.close();
-      await fetch('/stop', { method: 'POST' });
-
-      setStatus('idle');
-      buttons(false);
-      addMsg('System', 'Task aborted', true);
-      closeThinkDock();
-    };
-
-    if (manual) {
-      const sel = $('#manual-chooser');
-      sel.innerHTML = manualNames.map(n => `<option>${n}</option>`).join('');
-      $('#step2').onclick = () => fetch('/choose_next', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          name: sel.value
-        })
-      })
+function ensureThinkHandling(id, chunk) {
+  let c = chunk;
+  if (c.includes('<think>') || think.active) {
+    if (!think.open) openThinkDock();
+    while (c.length) {
+      if (!think.active) {
+        const i = c.indexOf('<think>'); if (i === -1) break;
+        c = c.slice(i + 7); think.active = true;
+        if (streams[id]) streams[id].thinkPhase = true;
+      } else {
+        const j = c.indexOf('</think>');
+        if (j === -1) { think.buffer += c; c = ''; break; }
+        else {
+          think.buffer += c.slice(0, j); c = c.slice(j + 8); think.active = false;
+          if (streams[id]) streams[id].thinkPhase = false;
+          renderThink();
+        }
+      }
     }
+    renderThink();
+  }
+}
+
+function openThinkDock() { think.open = true; $('#thinkdock').style.display = 'block'; }
+function closeThinkDock() { think.open = false; think.active = false; think.buffer = ''; $('#thinkdock').style.display = 'none'; }
+function renderThink() { $('#thinkbody').textContent = think.buffer; $('#thinklen').textContent = think.buffer.length + ' chars'; }
+
+function renderTeam() {
+  const container = $('#team'); if (!container) return;
+  $('#team-count').textContent = `${agents.length} members`;
+  if (!agents.length) {
+    container.innerHTML = '<div style="color:var(--muted); padding:16px; text-align:center; font-size:13px; border:1px dashed var(--border); border-radius:6px;">No agents in team.</div>';
+    return;
+  }
+  container.innerHTML = agents.map((a, i) => `
+    <div class='team-item'>
+      <div class="team-item-header">
+        <input data-i='${i}' class='name' value='${a.name}' placeholder='Name' />
+        <div class="team-item-actions">
+          <button data-i='${i}' class='btn btn-neutral up'>▲</button>
+          <button data-i='${i}' class='btn btn-neutral down'>▼</button>
+          <button data-i='${i}' class='btn btn-danger rm'>✕</button>
+        </div>
+      </div>
+      <textarea data-i='${i}' class='sys' placeholder='System Message'>${a.system || ""}</textarea>
+      <div class="team-item-footer">
+        <label>Temp</label>
+        <input data-i='${i}' class='num' type='number' step='0.1' min='0' max='2' value='${a.temperature ?? 0.3}' />
+      </div>
+    </div>`).join('');
+  $$('.name').forEach(el => el.onchange = () => { agents[el.dataset.i].name = el.value; saveSession(); });
+  $$('.sys').forEach(el => el.onchange = () => { agents[el.dataset.i].system = el.value; saveSession(); });
+  $$('.num').forEach(el => el.onchange = () => { agents[el.dataset.i].temperature = parseFloat(el.value); saveSession(); });
+  $$('.up').forEach(el => el.onclick = () => { let i = +el.dataset.i; if (i > 0) { [agents[i - 1], agents[i]] = [agents[i], agents[i - 1]]; renderTeam(); saveSession(); } });
+  $$('.down').forEach(el => el.onclick = () => { let i = +el.dataset.i; if (i < agents.length - 1) { [agents[i + 1], agents[i]] = [agents[i], agents[i + 1]]; renderTeam(); saveSession(); } });
+  $$('.rm').forEach(el => el.onclick = () => { agents.splice(+el.dataset.i, 1); renderTeam(); saveSession(); });
+}
+
+function buttons(running) {
+  const A = $('#actions'); if (!A) return;
+  if (running) {
+    A.innerHTML = `<button id='stop' class='btn btn-danger' style="width:100%">Stop Task</button>`;
+    $('#stop').onclick = async () => {
+      if (es) es.close(); await fetch('/stop', { method: 'POST' });
+      setStatus('idle'); buttons(false); closeThinkDock();
+    };
   } else {
     A.innerHTML = `<button id='start' class='btn btn-primary' style='width:100%'>Start Task</button>`;
-    $('#start').onclick = startRun
+    $('#start').onclick = startRun;
   }
 }
-async function startRun() { if (agents.length < 2) { toast('Add at least two agents to start.'); return } if (es) es.close(); $('#chat').innerHTML = ''; closeThinkDock(); streams = {}; addMsg('System', 'Task started'); setStatus('running'); buttons(true); manualNames = agents.map(a => a.name).concat(['Human_Admin']); if (graph) { graph.clear(); graph.paint() }; const payload = new URLSearchParams({ model: $('#model').value, goal: btoa($('#goal').value || ''), agents: btoa(JSON.stringify(agents)), manager_mode: $('#mode').value, turns: $('#turns').value || '', temperature: $('#temperature').value || '0.3' }); es = new EventSource('/stream?' + payload.toString()); es.onmessage = ev => { if (ev.data === '[DONE]') { es.close(); setStatus('idle'); buttons(false); addMsg('System', 'Task complete'); return } try { const d = JSON.parse(ev.data); if (d.type === 'status') { setStatus(d.state) } else if (d.type === 'chat') { addMsg(d.sender, d.message, false); if (d.graph_edge) { updateGraph(d.graph_edge) } } else if (d.type === 'stream_start') { addMsg(d.sender, '', false, d.id) } else if (d.type === 'token') { appendToken(d.id, d.delta) } else if (d.type === 'stream_end') { } } catch (e) { } }; es.onerror = (e) => { console.error("SSE Error:", e); addMsg('Error', 'Connection lost', true); try { es.close() } catch { } setStatus('idle'); buttons(false) } }
-function renderTreeNode(node) {
-  const icon = node.type === 'file' ? '📄' : '📁'; const actions = `<div class="node-actions"><button class="rename-node" data-path="${node.path}" title="Rename">✏️</button><button class="delete-node" data-path="${node.path}" title="Delete">✕</button></div>`; const nameEl = node.type === 'file' ? `<a href="/workspace/${node.path}" target="_blank" class="node-name">${node.name}</a>` : `<span class="node-name">${node.name}</span>`; const content = `
-      <div class="node" data-path="${node.path}">
-        <span class="node-icon">${icon}</span>
-        ${nameEl}
-        ${actions}
-      </div>`; let children = ''; if (node.children && node.children.length > 0) { children = `<ul>${node.children.map(renderTreeNode).join('')}</ul>` } return `<li>${content}${children}</li>`
+
+async function startRun() {
+  if (agents.length < 2) { toast('Add at least two agents.'); return; }
+  $('#chat').innerHTML = ''; setStatus('running'); buttons(true);
+  const p = new URLSearchParams({ model: $('#model').value, goal: btoa($('#goal').value), agents: btoa(JSON.stringify(agents)), manager_mode: $('#mode').value, turns: $('#turns').value, temperature: $('#temperature').value });
+  es = new EventSource('/stream?' + p.toString());
+  es.onmessage = ev => {
+    if (ev.data === '[DONE]') { es.close(); setStatus('idle'); buttons(false); return; }
+    const d = JSON.parse(ev.data);
+    if (d.type === 'status') setStatus(d.state);
+    else if (d.type === 'chat') addMsg(d.sender, d.message);
+    else if (d.type === 'stream_start') addMsg(d.sender, '', false, d.id);
+    else if (d.type === 'token') appendToken(d.id, d.delta);
+  };
 }
-async function refreshTree() { try { const r = await fetch('/api/workspace/tree'); const d = await r.json(); const html = '<ul>' + renderTreeNode(d) + '</ul>'; $('#tree').innerHTML = html; $('#tree').addEventListener('click', onTreeClick) } catch (e) { console.error("Error in refreshTree:", e) } }
-async function onTreeClick(e) { if (e.target.classList.contains('delete-node')) { const path = e.target.dataset.path; if (confirm(`Are you sure you want to delete '${path}'?`)) { try { const r = await fetch('/api/workspace/delete', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) }); if (!r.ok) { const err = await r.json().catch(() => ({ error: 'Request failed' })); throw new Error(err.message || err.error) } toast(`Deleted ${path}`); refreshTree() } catch (err) { toast(`Error deleting ${path}: ${err.message}`) } } } else if (e.target.classList.contains('rename-node')) { e.preventDefault(); e.stopPropagation(); handleRename(e.target) } }
-function handleRename(renameButton) { const nodeDiv = renameButton.closest('.node'); const nameEl = nodeDiv.querySelector('.node-name'); const oldPath = renameButton.dataset.path; const oldName = nameEl.textContent; const input = document.createElement('input'); input.type = 'text'; input.value = oldName; input.className = 'node-name-input'; nameEl.replaceWith(input); input.focus(); input.select(); const finishRename = async () => { const newName = input.value.trim(); if (newName && newName !== oldName) { const oldPathParts = oldPath.split('/'); const newPath = [...oldPathParts.slice(0, -1), newName].join('/'); try { const r = await fetch('/api/workspace/rename', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ old_path: oldPath, new_path: newPath }) }); if (!r.ok) { const err = await r.json().catch(() => ({ error: 'Request failed' })); throw new Error(err.message || err.error) } toast(`Renamed to ${newName}`) } catch (err) { toast(`Error renaming: ${err.message}`) } } refreshTree() }; input.onblur = finishRename; input.onkeydown = e => { if (e.key === 'Enter') { input.blur() } else if (e.key === 'Escape') { input.onblur = null; refreshTree() } } }
-async function loadModels() { $('#model').innerHTML = '<option>Loading…</option>'; try { const r = await fetch('/api/models'); const models = await r.json(); const sel = $('#model'); if (Array.isArray(models) && models.length) { sel.innerHTML = models.map(m => `<option>${m}</option>`).join(''); const def = models.includes('gemini-2.0-flash') ? 'gemini-2.0-flash' : models[0]; sel.value = def; $('#model-hint').textContent = `Loaded ${models.length} models`; $('#model-count').textContent = models.length; lastModels = models } else { sel.innerHTML = ''; $('#model-hint').textContent = 'No models found'; $('#model-count').textContent = '0' } } catch (e) { $('#model').innerHTML = ''; $('#model-hint').textContent = 'Error loading models'; $('#model-count').textContent = '!' } }
-const origAddMsg = addMsg; addMsg = function (sender, text, mine = false, id = null) { window.__transcript = (window.__transcript || []).concat([{ t: Date.now(), from: sender, text }]); return origAddMsg(sender, text, mine, id) };
-function saveSession() { try { const session = { goal: $('#goal').value, agents: agents }; localStorage.setItem('agentStudioSession', JSON.stringify(session)) } catch (e) { console.error("Failed to save session", e) } }
-function loadSession() { const saved = localStorage.getItem('agentStudioSession'); if (!saved) return; try { const session = JSON.parse(saved); if (session.goal) $('#goal').value = session.goal; if (session.agents) agents = session.agents } catch (e) { console.error("Failed to load session", e); localStorage.removeItem('agentStudioSession') } }
-function initTerminal() {
-  if (term) return; // Already initialized
-  const terminalContainer = document.getElementById('terminal-container');
-  term = new Terminal({
-    cursorBlink: true,
-    fontFamily: 'Menlo, Monaco, Consolas, "Courier New", monospace',
-    fontSize: 13,
-    theme: {
-      background: '#020617', // var(--sidebar)
-      foreground: '#e2e8f0', // var(--text)
-      cursor: '#e2e8f0',
+
+const ICONS = {
+  file: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>`,
+  folder: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>`,
+  edit: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>`,
+  delete: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>`
+};
+
+function renderTreeNode(n) {
+  const icon = n.type === 'file' ? ICONS.file : ICONS.folder;
+  const name = n.type === 'file' ? `<a href="/workspace/${n.path}" target="_blank" class="node-name">${n.name}</a>` : `<span class="node-name">${n.name}</span>`;
+  const actions = `<div class="node-actions">
+    <button class="rename-node" data-path="${n.path}" title="Rename">${ICONS.edit}</button>
+    <button class="delete-node" data-path="${n.path}" title="Delete">${ICONS.delete}</button>
+  </div>`;
+  let children = n.children ? `<ul>${n.children.map(renderTreeNode).join('')}</ul>` : '';
+  return `<li><div class="node">${icon}${name}${actions}</div>${children}</li>`;
+}
+
+async function refreshTree() {
+  const r = await fetch('/api/workspace/tree');
+  const d = await r.json();
+  $('#tree').innerHTML = `<ul>${renderTreeNode(d)}</ul>`;
+  // We'll use event delegation on #tree in DOMContentLoaded
+}
+
+async function onTreeClick(e) {
+  const deleteBtn = e.target.closest('.delete-node');
+  const renameBtn = e.target.closest('.rename-node');
+  if (deleteBtn) {
+    const p = deleteBtn.dataset.path;
+    if (await showConfirm({ title: 'Delete Item', message: `Delete ${p}?`, okText: 'Delete' })) {
+      await fetch('/api/workspace/delete', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: p }) });
+      refreshTree();
     }
-  });
-  const fitAddon = new FitAddon.FitAddon();
-  term.loadAddon(fitAddon);
-  term.open(terminalContainer);
-  fitAddon.fit();
+  } else if (renameBtn) handleRename(renameBtn);
+}
 
-  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${wsProtocol}//${window.location.host}/api/workspace/terminal`;
-  ws = new WebSocket(wsUrl);
-
-  ws.onopen = () => {
-    // Send initial size
-    const initialSize = `resize:${term.rows}:${term.cols}`;
-    ws.send(initialSize);
-  };
-
-  ws.onmessage = (event) => {
-    term.write(event.data);
-  };
-
-  ws.onclose = () => {
-    term.write('\\r\\n\\n[Connection Closed]');
-  };
-
-  term.onData((data) => {
-    ws.send(data);
-  });
-
-  window.addEventListener('resize', () => {
-    fitAddon.fit();
-    const size = `resize:${term.rows}:${term.cols}`;
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(size);
+function handleRename(btn) {
+  const node = btn.closest('.node'); const nameEl = node.querySelector('.node-name');
+  const oldPath = btn.dataset.path; const oldName = nameEl.textContent;
+  const input = document.createElement('input'); input.value = oldName; input.className = 'node-name-input';
+  nameEl.replaceWith(input); input.focus(); input.select();
+  input.onblur = async () => {
+    const newName = input.value.trim();
+    if (newName && newName !== oldName) {
+      const parts = oldPath.split('/'); const newPath = [...parts.slice(0, -1), newName].join('/');
+      await fetch('/api/workspace/rename', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ old_path: oldPath, new_path: newPath }) });
     }
-  });
-}
-function initGraph() { const container = $('#graph-container'); const width = container.scrollWidth; const height = container.scrollHeight || 500; graph = new G6.Graph({ container, width, height, fitView: true, layout: { type: 'force', preventOverlap: true, nodeSize: 30 }, defaultNode: { size: 30, style: { fill: '#3b82f6', stroke: '#2563eb', lineWidth: 2, }, labelCfg: { style: { fill: '#e2e8f0' } } }, defaultEdge: { style: { stroke: '#94a3b8', lineWidth: 1.5, endArrow: { path: G6.Arrow.triangle(), d: 5, } } } }); graph.data({ nodes: [], edges: [] }); graph.render() }
-function updateGraph(edge) { const fromNode = graph.findById(edge.from); if (!fromNode) { graph.addItem('node', { id: edge.from, label: edge.from }) } const toNode = graph.findById(edge.to); if (!toNode) { graph.addItem('node', { id: edge.to, label: edge.to }) } graph.addItem('edge', { source: edge.from, target: edge.to }); }
-async function loadTools() {
-  try {
-    const r = await fetch('/api/tools'); const tools = await r.json(); const container = $('#playground-tools'); container.innerHTML = tools.map(t => `
-      <label title="${t.description}" style="display:flex;align-items:center;gap:4px;background:var(--panel);border:1px solid var(--border);padding:4px 8px;border-radius:6px;font-size:12px;cursor:pointer;">
-        <input type="checkbox" class="playground-tool-checkbox" value="${t.name}" />
-        <span>${t.name}</span>
-      </label>`).join('')
-  } catch (e) { console.error("Failed to load tools", e) }
-}
-function setupTabs() { const tabs = $$('.tab'); const sections = $$('section'); tabs.forEach(tab => { tab.onclick = () => { tabs.forEach(t => t.classList.remove('active')); sections.forEach(s => s.classList.add('hidden')); tab.classList.add('active'); const target = tab.id.replace('tab-', ''); $(`#${target}`).classList.remove('hidden'); if (target === 'work') refreshTree(); if (target === 'terminal') initTerminal(); if (target === 'graph' && graph) graph.fitView(); if (target === 'playground') loadTools() } }) }
-function registerCommand(id, description, action) {
-  commands.push({ id, description, action });
+    refreshTree();
+  };
+  input.onkeydown = e => { if (e.key === 'Enter') input.blur(); if (e.key === 'Escape') refreshTree(); };
 }
 
-function renderCommands(filter = '') {
-  const list = $('#command-list');
-  list.innerHTML = '';
-  const filteredCommands = commands.filter(c => c.description.toLowerCase().includes(filter.toLowerCase()));
-
-  filteredCommands.forEach(command => {
-    const item = document.createElement('li');
-    item.className = 'command-item';
-    item.textContent = command.description;
-    item.onclick = () => {
-      command.action();
-      toggleCommandPalette(false);
-    };
-    list.appendChild(item);
+async function showConfirm({ title, message, okText }) {
+  const m = $('#confirm-modal'); $('#confirm-title').textContent = title; $('#confirm-msg').textContent = message; $('#confirm-ok').textContent = okText;
+  m.style.display = 'flex';
+  return new Promise(resolve => {
+    $('#confirm-cancel').onclick = () => { m.style.display = 'none'; resolve(false); };
+    $('#confirm-ok').onclick = () => { m.style.display = 'none'; resolve(true); };
   });
 }
 
-function toggleCommandPalette(show) {
-  const palette = $('#command-palette');
-  if (show) {
-    renderCommands();
-    palette.style.display = 'block';
-    $('#command-input').value = '';
-    $('#command-input').focus();
-    commandPaletteOpen = true;
-  } else {
-    palette.style.display = 'none';
-    commandPaletteOpen = false;
-  }
+function saveSession() {
+  const s = { goal: $('#goal').value, agents, settings: { model: $('#model').value, mode: $('#mode').value, turns: $('#turns').value, temperature: $('#temperature').value } };
+  localStorage.setItem('agentStudioSession', JSON.stringify(s));
+}
+
+function loadSession() {
+  const saved = localStorage.getItem('agentStudioSession'); if (!saved) return;
+  const s = JSON.parse(saved); agents = s.agents || [];
+  if (s.goal) $('#goal').value = s.goal; if (s.settings) { $('#mode').value = s.settings.mode; $('#turns').value = s.settings.turns; $('#temperature').value = s.settings.temperature; }
+}
+
+async function loadModels() {
+  const r = await fetch('/api/models'); const models = await r.json();
+  const sel = $('#model'); sel.innerHTML = models.map(m => `<option>${m}</option>`).join('');
+  const saved = JSON.parse(localStorage.getItem('agentStudioSession') || '{}');
+  if (saved.settings?.model && models.includes(saved.settings.model)) sel.value = saved.settings.model;
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  initGraph(); setupTabs();
+  const side = $('.side');
+  const overlay = $('#sidebar-overlay');
+  const closeSidebar = () => { side.classList.remove('open'); overlay.classList.remove('open'); };
 
-  const sidebarToggle = $('#sidebar-toggle');
-  const sidebarOverlay = $('#sidebar-overlay');
-  const sideNav = $('.side');
+  $('#sidebar-toggle').onclick = () => { side.classList.add('open'); overlay.classList.add('open'); };
+  overlay.onclick = closeSidebar;
+  $('#sidebar-close-mobile').onclick = closeSidebar;
 
-  if (sidebarToggle && sidebarOverlay && sideNav) {
-    sidebarToggle.addEventListener('click', () => {
-      sideNav.classList.add('open');
-      sidebarOverlay.classList.add('open');
-    });
-    sidebarOverlay.addEventListener('click', () => {
-      sideNav.classList.remove('open');
-      sidebarOverlay.classList.remove('open');
-    });
+  $$('.tab').forEach(t => t.onclick = () => {
+    $$('.tab').forEach(x => x.classList.remove('active')); t.classList.add('active');
+    $$('section').forEach(s => s.classList.add('hidden'));
+    const target = t.id.split('-')[1]; $(`#${target}`).classList.remove('hidden');
+    const footer = $('.side-footer'); if (footer) footer.style.display = (target === 'setup') ? 'flex' : 'none';
+    if (window.innerWidth <= 768) closeSidebar();
+    if (target === 'work') refreshTree();
+  });
 
-    // Auto-open on mobile
-    if (window.innerWidth <= 768) {
-      sideNav.classList.add('open');
-      sidebarOverlay.classList.add('open');
-    }
-  }
+  $('#bot-add').onclick = () => {
+    const n = $('#bot-title').value.trim(); if (!n) return;
+    agents.push({ name: n.replace(/[^a-zA-Z0-9_]/g, '_'), system: $('#bot-description').value, temperature: 0.3 });
+    $('#bot-title').value = ''; $('#bot-description').value = ''; renderTeam(); saveSession();
+  };
 
-  registerCommand('view.setup', 'View: Show Setup', () => $('#tab-setup').click());
-  registerCommand('view.workspace', 'View: Show Workspace', () => $('#tab-work').click());
-  registerCommand('view.terminal', 'View: Show Terminal', () => $('#tab-terminal').click());
-  registerCommand('view.graph', 'View: Show Graph', () => $('#tab-graph').click());
-  registerCommand('view.playground', 'View: Show Playground', () => $('#tab-playground').click());
-  registerCommand('view.settings', 'View: Show Settings', () => $('#tab-settings').click());
+  $('#generate-agents').onclick = async () => {
+    const scenario = $('#scenario').value.trim(); if (!scenario) return;
+    const btn = $('#generate-agents'); btn.disabled = true; btn.textContent = 'Generating...';
+    try {
+      const r = await fetch('/api/scenario/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scenario, model: $('#model').value, num_agents: $('#num-agents').value }) });
+      const d = await r.json(); agents = d.agents; if (d.goal) $('#goal').value = d.goal; renderTeam();
+    } finally { btn.disabled = false; btn.textContent = 'Generate Scenario'; }
+  };
 
-  $('#thinkmin').onclick = () => { if (think.minimized) expandThinkDock(); else collapseThinkDock() }; $('#thinkclose').onclick = () => { closeThinkDock() }; $('#bot-add').onclick = () => { const n = $('#bot-title').value.trim(); if (!n) return; const sanitizedName = n.replace(/[^a-zA-Z0-9_]/g, '_'); agents.push({ name: sanitizedName, system: $('#bot-description').value.trim(), temperature: 0.3 }); $('#bot-title').value = ''; $('#bot-description').value = ''; renderTeam(); saveSession() }; $('#generate-agents').onclick = async () => { const scenario = $('#scenario').value.trim(); if (!scenario) { toast('Please enter a scenario description.'); return } const btn = $('#generate-agents'); btn.disabled = true; btn.textContent = 'Generating...'; try { const r = await fetch('/api/scenario/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scenario, model: $('#model').value, num_agents: $('#num-agents').value }) }); if (!r.ok) { const err = await r.json().catch(() => ({ error: 'Request failed' })); throw new Error(err.error) } const data = await r.json(); agents = data.agents; $('#goal').value = data.goal || ''; renderTeam(); toast('Agents and goal generated successfully.') } catch (e) { toast('Failed to generate agents: ' + e.message) } finally { btn.disabled = false; btn.textContent = 'Generate Scenario' } }; $('#fbform').onsubmit = async e => { e.preventDefault(); const v = $('#fb').value.trim(); if (!v) return; addMsg('You', v, true); await fetch('/user_input', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: v }) }); $('#fb').value = ''; setStatus('running') }; $('#upload').onclick = async () => { const f = $('#file').files[0]; if (!f) return; const fd = new FormData(); fd.append('file', f); const r = await fetch('/api/workspace/upload', { method: 'POST', body: fd }); if (!r.ok) { const e = await r.json(); toast('Upload failed: ' + (e.error || e.message)) } else { toast('Uploaded'); refreshTree() } }; $('#refresh').onclick = () => { refreshTree() }; $('#new-folder').onclick = async () => { const path = prompt('Enter the new folder name:'); if (path) { try { const r = await fetch('/api/workspace/new_folder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) }); if (!r.ok) { const err = await r.json().catch(() => ({ error: 'Request failed' })); throw new Error(err.message || err.error) } toast(`Created folder ${path}`); refreshTree() } catch (err) { toast(`Error creating folder: ${err.message}`) } } };
+  $('#fbform').onsubmit = async e => {
+    e.preventDefault(); const v = $('#fb').value.trim(); if (!v) return;
+    addMsg('You', v, true); await fetch('/user_input', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: v }) });
+    $('#fb').value = ''; setStatus('running');
+  };
 
-  document.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'P') {
-      e.preventDefault();
-      toggleCommandPalette(!commandPaletteOpen);
-    }
+  $('#sessions').onclick = async () => {
+    $('#sessions-modal').style.display = 'flex';
+    const r = await fetch('/api/sessions'); const sessions = await r.json();
+    $('#sessions-list').innerHTML = sessions.map(s => `<div style="padding:10px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between;"><span>${s}</span><div><button class="btn btn-neutral session-load" data-file="${s}">Load</button> <button class="btn btn-danger session-delete" data-file="${s}">✕</button></div></div>`).join('');
+  };
 
-    if (!commandPaletteOpen) return;
-
-    if (e.key === 'Escape') {
-      toggleCommandPalette(false);
-    }
-
-    const list = $('#command-list');
-    const items = Array.from(list.children);
-    const selected = list.querySelector('.selected');
-    let currentIndex = items.indexOf(selected);
-
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      if (selected) selected.classList.remove('selected');
-      currentIndex = (currentIndex + 1) % items.length;
-      if (items[currentIndex]) {
-        items[currentIndex].classList.add('selected');
-        items[currentIndex].scrollIntoView({ block: 'nearest' });
+  $('#sessions-list').onclick = async e => {
+    const f = e.target.dataset.file;
+    if (e.target.classList.contains('session-load')) {
+      const r = await fetch(`/api/sessions/${f}`); const d = await r.json();
+      agents = d.agents; $('#goal').value = d.goal; renderTeam(); $('#sessions-modal').style.display = 'none';
+    } else if (e.target.classList.contains('session-delete')) {
+      if (await showConfirm({ title: 'Delete Session', message: `Delete ${f}?`, okText: 'Delete' })) {
+        await fetch(`/api/sessions/${f}`, { method: 'DELETE' }); $('#sessions').click();
       }
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      if (selected) selected.classList.remove('selected');
-      currentIndex = (currentIndex - 1 + items.length) % items.length;
-      if (items[currentIndex]) {
-        items[currentIndex].classList.add('selected');
-        items[currentIndex].scrollIntoView({ block: 'nearest' });
-      }
-    } else if (e.key === 'Enter') {
-      e.preventDefault();
-      const target = selected || items[0];
-      if (target) target.click();
     }
-  });
+  };
 
-  $('#command-input').addEventListener('input', (e) => {
-    renderCommands(e.target.value);
-    const firstItem = $('#command-list').children[0];
-    if (firstItem) {
-      firstItem.classList.add('selected');
+  $('#export').onclick = () => { toast('Exporting...'); /* Transcript impl */ };
+  $('#tree').onclick = onTreeClick;
+  $('#refresh').onclick = refreshTree;
+  $('#new-folder').onclick = async () => {
+    const p = prompt('Folder name:');
+    if (p) {
+      await fetch('/api/workspace/new_folder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: p }) });
+      refreshTree();
     }
-  });
+  };
 
-  document.addEventListener('click', (e) => {
-    const palette = $('#command-palette');
-    if (commandPaletteOpen && !palette.contains(e.target)) {
-      toggleCommandPalette(false);
-    }
-  });
-  const sessionsModal = $('#sessions-modal'); const sessionsList = $('#sessions-list'); async function renderSessions() {
-    const r = await fetch('/api/sessions'); const files = await r.json(); sessionsList.innerHTML = files.map(f => `
-      <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 12px; border-bottom:1px solid var(--border);">
-        <span style="font-size:13px; font-weight:500;">${f}</span>
-        <div style="display:flex; gap:6px;">
-          <button class="btn btn-success session-load" data-file="${f}" style="padding:4px 8px; font-size:11px;">Load</button>
-          <button class="btn btn-danger session-delete" data-file="${f}" style="padding:4px 8px; font-size:11px;">Delete</button>
-        </div>
-      </div>`).join('')
-  } $('#sessions').onclick = async () => { await renderSessions(); sessionsModal.style.display = 'flex' }; $('#sessions-close').onclick = () => { sessionsModal.style.display = 'none' }; $('#session-save').onclick = async () => { const name = $('#session-name').value.trim(); if (!name) { toast('Please enter a session name.'); return } await fetch('/api/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, model: $('#model').value, goal: $('#goal').value, agents }) }); toast('Session saved.'); $('#session-name').value = ''; await renderSessions() }; sessionsList.addEventListener('click', async e => { const target = e.target; const file = target.dataset.file; if (target.classList.contains('session-load')) { const r = await fetch(`/api/sessions/${file}`); const data = await r.json(); agents = data.agents || []; $('#goal').value = data.goal || ''; await loadModels(); if (data.model) { $('#model').value = data.model } renderTeam(); toast(`Session ${file} loaded.`); sessionsModal.style.display = 'none' } if (target.classList.contains('session-delete')) { if (confirm(`Are you sure you want to delete ${file}?`)) { await fetch(`/api/sessions/${file}`, { method: 'DELETE' }); toast(`Session ${file} deleted.`); await renderSessions() } } }); $('#export').onclick = async () => { const tr = (window.__transcript || []); const r1 = await fetch('/api/transcript/md', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ transcript: tr }) }); const d1 = await r1.json(); const r2 = await fetch('/api/transcript/html', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ transcript: tr }) }); const d2 = await r2.json(); toast('Exports ready: MD & HTML'); if (d1.file) { window.open(d1.file, '_blank') } if (d2.file) { window.open(d2.file, '_blank') } }; $('#reloadModels').onclick = () => loadModels(); $('#playground-form').onsubmit = async e => { e.preventDefault(); const input = $('#playground-input'); const msg = input.value.trim(); if (!msg) return; const agentName = $('#playground-agent-name').value; const systemMessage = $('#playground-system-message').value; const selectedTools = $$('.playground-tool-checkbox:checked').map(el => el.value); const chatArea = $('#playground-chat-area'); const userMsgEl = document.createElement('div'); userMsgEl.innerHTML = `<div style="margin-bottom:4px; font-weight:600; font-size:11px; color:var(--muted)">YOU</div><div style="background:var(--primary); color:white; padding:8px 12px; border-radius:8px; display:inline-block;">${msg}</div>`; chatArea.append(userMsgEl); input.value = ''; input.disabled = true; $('#playground-send').disabled = true; try { const r = await fetch('/api/agent/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agent: { name: agentName, system_message: systemMessage, tools: selectedTools }, message: msg, model: $('#model').value }) }); const res = await r.json(); const agentMsgEl = document.createElement('div'); agentMsgEl.style.marginTop = '12px'; if (r.ok) { agentMsgEl.innerHTML = `<div style="margin-bottom:4px; font-weight:600; font-size:11px; color:var(--muted)">${agentName.toUpperCase()}</div><div style="background:var(--panel); border:1px solid var(--border); padding:8px 12px; border-radius:8px;">${res.reply}</div>` } else { agentMsgEl.innerHTML = `<b>Error:</b><p style="color:var(--danger)">${res.error || res.message}</p>` } chatArea.append(agentMsgEl) } catch (err) { const errorEl = document.createElement('div'); errorEl.innerHTML = `<b>Error:</b><p style="color:var(--danger)">${err.message}</p>`; chatArea.append(errorEl) } finally { input.disabled = false; $('#playground-send').disabled = false; input.focus() } }; $('#goal').oninput = saveSession; loadSession(); setStatus('idle'); buttons(false); renderTeam(); loadModels()
+  loadSession(); setStatus('idle'); buttons(false); renderTeam(); loadModels();
 });
