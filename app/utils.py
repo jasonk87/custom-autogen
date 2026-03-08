@@ -22,7 +22,14 @@ def _safe_path(path: str) -> str:
     """
     Ensures that the given path is within the workspace directory.
     """
-    base = os.path.abspath(WORKSPACE_DIR)
+    try:
+        from app.state import state
+
+        workspace = getattr(state, "active_workspace", WORKSPACE_DIR) or WORKSPACE_DIR
+    except Exception:
+        workspace = WORKSPACE_DIR
+
+    base = os.path.abspath(workspace)
     p = os.path.abspath(os.path.join(base, path))
     if not p.startswith(base + os.sep) and p != base:
         raise ValueError("Path is outside the allowed workspace directory.")
@@ -33,8 +40,15 @@ def tree_listing(root: str) -> Dict[str, Any]:
     Generates a tree listing of the workspace directory.
     """
     root_abs = _safe_path(root)
+    try:
+        from app.state import state
+
+        workspace = getattr(state, "active_workspace", WORKSPACE_DIR) or WORKSPACE_DIR
+    except Exception:
+        workspace = WORKSPACE_DIR
+
     def walk(p: str) -> Dict[str, Any]:
-        rel_path = os.path.relpath(p, WORKSPACE_DIR)
+        rel_path = os.path.relpath(p, workspace)
         if rel_path == ".":
             rel_path = ""
         node = {"name": os.path.basename(p) or os.path.basename(root_abs), "type": "dir", "path": rel_path, "children": []}
@@ -44,7 +58,7 @@ def tree_listing(root: str) -> Dict[str, Any]:
                 if os.path.isdir(fp):
                     node["children"].append(walk(fp))
                 else:
-                    node["children"].append({"name": nm, "type": "file", "path": os.path.relpath(fp, WORKSPACE_DIR)})
+                    node["children"].append({"name": nm, "type": "file", "path": os.path.relpath(fp, workspace)})
         except Exception as e:
             node["error"] = str(e)
         return node

@@ -1,52 +1,63 @@
+﻿import asyncio
 import json
 import queue
-import asyncio
 import random
 from typing import Any, Dict, List, Optional, Sequence
 
 from autogen_agentchat.agents import AssistantAgent, UserProxyAgent
-from autogen_agentchat.messages import ModelClientStreamingChunkEvent, TextMessage, BaseChatMessage, BaseAgentEvent, SelectSpeakerEvent, ToolCallRequestEvent, ToolCallExecutionEvent
+from autogen_agentchat.messages import (
+    BaseAgentEvent,
+    BaseChatMessage,
+    SelectSpeakerEvent,
+    TextMessage,
+    ToolCallExecutionEvent,
+    ToolCallRequestEvent,
+)
 from autogen_agentchat.teams import SelectorGroupChat
-from autogen_ext.models.openai import OpenAIChatCompletionClient
 from autogen_core import CancellationToken
+from autogen_ext.models.openai import OpenAIChatCompletionClient
 
-from app.config import GEMINI_API_KEY, DEFAULT_MODEL
+from app import log
+from app.config import DEFAULT_MODEL, gemini_model_info, require_gemini_api_key
 from app.state import state
 from app.tools import TOOLS
-from app.tools import TOOLS
-from app import log
+
 
 class SafeOpenAIChatCompletionClient(OpenAIChatCompletionClient):
-    """
-    A wrapper around OpenAIChatCompletionClient to handle specific crashes 
-    caused by the Gemini API returning empty choices (likely due to invalid API key).
-    """
+    """Wraps model errors with clearer Gemini-specific guidance."""
+
     async def create(self, messages, **kwargs):
         try:
             return await super().create(messages, **kwargs)
-        except TypeError as e:
-            # Catch the specific crash happening in autogen_ext
-            if "'NoneType' object is not subscriptable" in str(e):
+        except asyncio.CancelledError:
+            log.info(
+                "model_client_cancelled",
+                extra={"detail": "Model client creation cancelled (likely session stop)"},
+            )
+            raise
+        except Exception as e:
+            error_str = str(e)
+            if "'NoneType' object is not subscriptable" in error_str:
                 log.error("gemini_api_crash", extra={"reason": "Received empty choices from API"})
                 raise RuntimeError(
                     "Gemini API Error: The model returned an empty response. "
-                    "This usually indicates a SAFETY FILTER trigger (refusal to generate) or an INVALID API KEY. "
-                    "If your key is valid, try adjusting your prompt or system instructions."
+                    "This usually indicates a safety filter trigger or invalid API key."
                 ) from e
+
+            log.error("model_client_error", extra={"error": error_str, "type": type(e).__name__})
             raise
 
 
-def _create_graph_payload(message: Any, groupchat: SelectorGroupChat, current_speaker: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def _create_graph_payload(
+    message: Any,
+    groupchat: SelectorGroupChat,
+    current_speaker: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """Creates a payload for the frontend, including graph data if applicable."""
     msg_type = type(message).__name__
-    # DEBUG LOGGING
     log.info("debug_event_inspector", extra={"type": msg_type, "content": str(message)[:100]})
 
-    # Strictly ignore streaming events by name to avoid import/instance issues
     if "Streaming" in msg_type or "Chunk" in msg_type:
-        return None
-    
-    if msg_type == "ModelClientStreamingChunkEvent":
         return None
 
     payload = None
@@ -57,30 +68,33 @@ def _create_graph_payload(message: Any, groupchat: SelectorGroupChat, current_sp
             "message": f"Selected speaker: {message.content[0]}",
             "graph_edge": {
                 "from": message.source,
-                "to": message.content[0]
-            }
+                "to": message.content[0],
+            },
         }
     elif isinstance(message, ToolCallRequestEvent):
         tool_names = [call.name for call in message.content]
         payload = {
             "type": "chat",
             "sender": message.source,
-            "message": f"🛠️ Calling tools: {', '.join(tool_names)}",
+            "message": f"Calling tools: {', '.join(tool_names)}",
         }
     elif isinstance(message, ToolCallExecutionEvent):
         results = []
         for res in message.content:
-            results.append(str(res.content)[:200] + ("..." if len(str(res.content)) > 200 else ""))
+            result_text = str(res.content)
+            results.append(result_text[:200] + ("..." if len(result_text) > 200 else ""))
         payload = {
             "type": "chat",
             "sender": message.source,
-            "message": f"⚡ Tool Output: {'; '.join(results)}",
+            "message": f"Tool output: {'; '.join(results)}",
         }
     elif isinstance(message, BaseChatMessage):
-        # Allow all chat messages to pass through (bots and humans)
         txt = message.to_text().strip()
         if not txt:
-            log.warning("filtering_empty_chat_message", extra={"sender": message.source, "type": msg_type})
+            log.warning(
+                "filtering_empty_chat_message",
+                extra={"sender": message.source, "type": msg_type},
+            )
             return None
         payload = {
             "type": "chat",
@@ -88,13 +102,16 @@ def _create_graph_payload(message: Any, groupchat: SelectorGroupChat, current_sp
             "message": txt,
             "graph_edge": {
                 "from": message.source,
-                "to": "GroupChat"
-            }
+                "to": getattr(groupchat, "name", "GroupChat"),
+            },
         }
     elif isinstance(message, BaseAgentEvent):
         txt = message.to_text().strip()
         if not txt:
-            log.warning("filtering_empty_agent_event", extra={"sender": message.source, "type": msg_type})
+            log.warning(
+                "filtering_empty_agent_event",
+                extra={"sender": message.source, "type": msg_type},
+            )
             return None
         payload = {
             "type": "chat",
@@ -102,49 +119,53 @@ def _create_graph_payload(message: Any, groupchat: SelectorGroupChat, current_sp
             "message": txt,
         }
     else:
-        # Log unknown message types
-        log.info("ignoring_unknown_message_type", extra={"type": msg_type, "source": getattr(message, "source", "unknown")})
-        
+        log.info(
+            "ignoring_unknown_message_type",
+            extra={"type": msg_type, "source": getattr(message, "source", "unknown")},
+        )
+
     return payload
 
+
 async def stream_to_queue(stream, out_q, groupchat):
-    # This helper might need update, but run_orchestrator loop is the main one.
-    # We'll update the main loop tracking instead.
     async for message in stream:
         payload = _create_graph_payload(message, groupchat)
         if payload:
             out_q.put(json.dumps(payload))
 
-async def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any]], manager_mode: str, out_q: "queue.Queue[str]", max_turns: int = 60, human_proxy: bool = False, temperature: float = 0.3):
+
+async def run_orchestrator(
+    goal: str,
+    model: str,
+    agents_cfg: List[Dict[str, Any]],
+    manager_mode: str,
+    out_q: "queue.Queue[str]",
+    max_turns: int = 60,
+    human_proxy: bool = False,
+    temperature: float = 0.3,
+):
     try:
-        # 1. Create model client
-        model_name = model or DEFAULT_MODEL
         model_name = model or DEFAULT_MODEL
         gemini_client = SafeOpenAIChatCompletionClient(
             model=model_name,
-            api_key=GEMINI_API_KEY,
+            api_key=require_gemini_api_key(),
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
             temperature=temperature,
+            model_info=gemini_model_info(model_name),
         )
 
         participants = []
-        
-        # Normalize manager_mode
         manager_mode = manager_mode.lower()
 
-        # 2. Define Input Function for UserProxy
-        async def input_func(prompt: str = "", cancellation_token: Optional[CancellationToken] = None) -> str:
-            # If in Auto mode and not strictly forcing human proxy, check if we have input.
-            # If no input is queued, we auto-proceed to avoid blocking or timeout.
+        async def input_func(
+            prompt: str = "",
+            cancellation_token: Optional[CancellationToken] = None,
+        ) -> str:
             if manager_mode == "auto" and not human_proxy:
                 try:
-                    # Check for immediate input
                     user_input = state.user_input_q.get_nowait()
                     return user_input
                 except queue.Empty:
-                    # No input waiting? Auto-reply "Approved" so the chat continues.
-                    # This prevents the socket timeout and "waiting for input" state.
-                    # Throttle the auto-reply to prevent flooding
                     await asyncio.sleep(1.0)
                     return "Approved"
 
@@ -153,7 +174,6 @@ async def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any
                 if state.stop_event.is_set():
                     return "exit"
                 try:
-                    # Use to_thread to avoid blocking the event loop
                     user_input = await asyncio.to_thread(state.user_input_q.get, timeout=1.0)
                     out_q.put(json.dumps({"type": "status", "state": "running"}))
                     return user_input
@@ -164,14 +184,11 @@ async def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any
                 except Exception:
                     return "exit"
 
-        # Add UserProxy
-        user_proxy = UserProxyAgent(
-            name="Human_Admin",
-            input_func=input_func,
-        )
-        participants.append(user_proxy)
+        include_human_proxy = bool(human_proxy)
+        if include_human_proxy:
+            user_proxy = UserProxyAgent(name="Human_Admin", input_func=input_func)
+            participants.append(user_proxy)
 
-        # Add Assistant Agents
         for agent_cfg in agents_cfg:
             agent = AssistantAgent(
                 name=agent_cfg["name"],
@@ -183,47 +200,46 @@ async def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any
             )
             participants.append(agent)
 
-
-        # 3. Create selector function
         selector_func = None
-        if manager_mode == "round_robin" or manager_mode == "roundrobin":
+        if manager_mode in {"round_robin", "roundrobin"}:
+
             class RoundRobinSelector:
                 def __init__(self, participants):
                     self.participants = participants
                     self.index = 0
+
                 def __call__(self, messages: Sequence[BaseAgentEvent | BaseChatMessage]) -> str | None:
                     name = self.participants[self.index % len(self.participants)].name
                     self.index += 1
                     return name
 
-            selector_instance = RoundRobinSelector(participants)
-            selector_func = selector_instance
+            selector_func = RoundRobinSelector(participants)
 
         elif manager_mode == "random":
-             def random_selector_func(messages: Sequence[BaseAgentEvent | BaseChatMessage]) -> str | None:
+
+            def random_selector_func(messages: Sequence[BaseAgentEvent | BaseChatMessage]) -> str | None:
                 return random.choice(participants).name
-             selector_func = random_selector_func
+
+            selector_func = random_selector_func
 
         elif manager_mode == "manual":
+
             async def manual_selector_func(messages: Sequence[BaseAgentEvent | BaseChatMessage]) -> str | None:
                 out_q.put(json.dumps({"type": "status", "state": "waiting_for_manual_selection"}))
                 while True:
-                     if state.stop_event.is_set():
-                         return None
-                     try:
-                         # Wait for the user to pick the next agent via the UI
-                         next_agent_name = await asyncio.to_thread(state.manual_next_q.get, timeout=1.0)
-                         out_q.put(json.dumps({"type": "status", "state": "running"}))
-                         return next_agent_name
-                     except queue.Empty:
-                         continue
-                     except Exception:
-                         return None
-            selector_func = manual_selector_func
-        
-        # for "auto", we leave selector_func as None, which triggers the default model-based selection in SelectorGroupChat
+                    if state.stop_event.is_set():
+                        return None
+                    try:
+                        next_agent_name = await asyncio.to_thread(state.manual_next_q.get, timeout=1.0)
+                        out_q.put(json.dumps({"type": "status", "state": "running"}))
+                        return next_agent_name
+                    except queue.Empty:
+                        continue
+                    except Exception:
+                        return None
 
-        # 4. Create GroupChat
+            selector_func = manual_selector_func
+
         groupchat = SelectorGroupChat(
             participants=participants,
             max_turns=max_turns,
@@ -232,12 +248,15 @@ async def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any
             allow_repeated_speaker=True,
         )
 
-        # 5. Run the chat
-        task = [TextMessage(content=goal, source="Human_Admin")] if goal else []
-
+        if goal:
+            if include_human_proxy:
+                task = [TextMessage(content=goal, source="Human_Admin")]
+            else:
+                task = goal
+        else:
+            task = []
         cancellation_token = CancellationToken()
 
-        # Monitoring stop event to cancel
         async def check_stop():
             while True:
                 if state.stop_event.is_set():
@@ -248,12 +267,14 @@ async def run_orchestrator(goal: str, model: str, agents_cfg: List[Dict[str, Any
         stop_monitor = asyncio.create_task(check_stop())
 
         try:
-             current_speaker = None
-             async for message in groupchat.run_stream(task=task, cancellation_token=cancellation_token):
+            current_speaker = None
+            async for message in groupchat.run_stream(task=task, cancellation_token=cancellation_token):
                 if hasattr(message, "source"):
-                    log.info("message_source_debug", extra={"source": message.source, "type": type(message).__name__})
-                
-                # Track current speaker
+                    log.info(
+                        "message_source_debug",
+                        extra={"source": message.source, "type": type(message).__name__},
+                    )
+
                 if isinstance(message, SelectSpeakerEvent):
                     log.info("select_speaker_debug", extra={"content": message.content})
                     current_speaker = message.content[0]

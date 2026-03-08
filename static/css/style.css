@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+﻿@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 :root {
   --bg-hsl: 222, 47%, 11%;
@@ -260,7 +260,7 @@ summary {
 }
 
 summary::before {
-  content: '→';
+  content: '>';
   transition: transform 0.3s;
   display: inline-block;
 }
@@ -560,6 +560,15 @@ summary:hover {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   backdrop-filter: blur(8px);
+}
+
+.pulse {
+  animation: statusPulse 1.4s ease-in-out infinite;
+}
+
+@keyframes statusPulse {
+  0%, 100% { opacity: 0.8; }
+  50% { opacity: 1; }
 }
 
 #fbform {

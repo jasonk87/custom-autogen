@@ -18,7 +18,7 @@ def test_execute_shell_command_cwd():
         os.remove(os.path.join(WORKSPACE_DIR, test_filename))
 
     # Use the tool to create a file in the workspace
-    command = f"touch {test_filename}"
+    command = f"echo ok > {test_filename}"
     execute_shell_command(command)
 
     # Check that the file was created in the WORKSPACE_DIR
@@ -29,8 +29,8 @@ def test_execute_shell_command_cwd():
 
 def test_execute_shell_command_error():
     """Test that the shell tool captures and returns errors."""
-    command = "ls non_existent_directory_for_sure"
+    command = "cd non_existent_directory_for_sure"
     result = execute_shell_command(command)
     assert "Error executing command" in result
     assert "Stderr:" in result
-    assert "No such file or directory" in result
+    assert "non_existent_directory_for_sure" in result

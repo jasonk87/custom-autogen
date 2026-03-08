@@ -3,6 +3,9 @@ import threading
 from dataclasses import dataclass
 from typing import Optional
 
+from app.config import WORKSPACE_DIR
+
+
 @dataclass
 class AppState:
     thread: Optional[threading.Thread] = None
@@ -10,6 +13,7 @@ class AppState:
     user_input_q: "queue.Queue[Optional[str]]" = queue.Queue()
     manual_next_q: "queue.Queue[Optional[str]]" = queue.Queue()
     is_running: bool = False
+    active_workspace: str = WORKSPACE_DIR
 
     def start(self, target, args) -> None:
         self.stop()

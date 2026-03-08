@@ -1,0 +1,15 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = [
+  ".pytest_cache",
+  ".squad_backups",
+  ".squad_cache",
+  "autogen_work_dir",
+  "jules-scratch",
+  "scripts",
+]
+
+[tool.ruff.lint]
+select = ["F"]
+ignore = ["F401"]

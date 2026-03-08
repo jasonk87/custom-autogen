@@ -1,8 +1,10 @@
 import os
 import shutil
+import subprocess
 from typing import Any, Dict
 
 from app.config import WORKSPACE_DIR
+from app.state import state
 from app.utils import _safe_path
 
 
@@ -16,7 +18,18 @@ def tool_listdir(path: str = ".") -> Dict[str, Any]:
 
 
 def tool_read_file(path: str) -> str:
-    with open(_safe_path(path), "r", encoding="utf-8") as f:
+    fp = _safe_path(path)
+    if not os.path.exists(fp):
+        return (
+            f"FILE_NOT_FOUND: '{path}' does not exist in the workspace. "
+            "Run listdir first to discover available files, or use write_file to create it."
+        )
+    if os.path.isdir(fp):
+        return (
+            f"NOT_A_FILE: '{path}' is a directory. "
+            "Run listdir to inspect directory contents and pick a file."
+        )
+    with open(fp, "r", encoding="utf-8") as f:
         return f.read()
 
 
@@ -29,8 +42,6 @@ def tool_write_file(path: str, content: str, overwrite: bool = True) -> str:
         f.write(content)
     return f"wrote {len(content)} bytes to {path}"
 
-
-import subprocess
 
 def tool_delete(path: str) -> str:
     fp = _safe_path(path)
@@ -56,22 +67,60 @@ def execute_shell_command(command: str) -> str:
         Ensure that the agent's instructions are safe and that the
         environment is properly sandboxed if security is a concern.
     """
+    raw_command = (command or "").strip()
+    if not raw_command:
+        return "Error executing command: empty command."
+
+    lowered = raw_command.lower()
+    blocked_tokens = [
+        "rm -rf /",
+        "del /f /s /q c:\\",
+        "format ",
+        "shutdown ",
+        "reboot ",
+        "mkfs",
+    ]
+    if any(token in lowered for token in blocked_tokens):
+        return "Error executing command: command blocked by safety policy."
+
+    # Lightweight compatibility layer for tests and simple commands across OSes.
+    cmd = raw_command
+    if lowered.startswith("touch "):
+        file_name = raw_command[6:].strip().strip("\"'")
+        cmd = f"python -c \"open(r'{file_name}', 'a', encoding='utf-8').close()\""
+    elif lowered.startswith("ls "):
+        target = raw_command[3:].strip()
+        cmd = f"python -c \"import os,sys;p=r'{target}';print('\\n'.join(os.listdir(p)))\""
+
+    workspace = getattr(state, "active_workspace", WORKSPACE_DIR) or WORKSPACE_DIR
+    if not os.path.isdir(workspace):
+        workspace = WORKSPACE_DIR
+    os.makedirs(workspace, exist_ok=True)
+    max_chars = 8000
+
     try:
         result = subprocess.run(
-            command,
+            cmd,
             shell=True,
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            cwd=WORKSPACE_DIR
+            cwd=workspace,
+            timeout=20,
         )
-        output = f"Stdout:\n{result.stdout}\n"
-        if result.stderr:
-            output += f"Stderr:\n{result.stderr}\n"
+        stdout = (result.stdout or "")[:max_chars]
+        stderr = (result.stderr or "")[:max_chars]
+        output = f"Stdout:\n{stdout}\n"
+        if stderr:
+            output += f"Stderr:\n{stderr}\n"
         return output
+    except subprocess.TimeoutExpired:
+        return "Error executing command: command timed out after 20 seconds."
     except subprocess.CalledProcessError as e:
-        return f"Error executing command: {e}\nStdout:\n{e.stdout}\nStderr:\n{e.stderr}"
+        stdout = (e.stdout or "")[:max_chars]
+        stderr = (e.stderr or "")[:max_chars]
+        return f"Error executing command: {e}\nStdout:\n{stdout}\nStderr:\n{stderr}"
 
 
 TOOLS: Dict[str, Any] = {

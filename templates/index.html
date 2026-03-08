@@ -1,32 +1,33 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
-
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Custom Agent Studio — v11</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=11" />
-  <script src="https://unpkg.com/@antv/g6@4.8.24/dist/g6.min.js"></script>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/xterm/5.3.0/xterm.min.css" />
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/xterm/5.3.0/xterm.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/xterm-addon-fit/0.8.0/xterm-addon-fit.min.js"></script>
+  <title>Custom Agent Studio - v11</title>
+  <link rel="stylesheet" href="/static/css/style.css?v=12" />
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
-
 <body>
   <div class="app">
     <div id="sidebar-overlay" class="sidebar-overlay"></div>
+
     <nav class="side">
       <header>
         <h1>Agent Studio</h1>
-        <button id="sessions" class="btn btn-neutral" style="padding: 4px 8px; font-size: 11px;">Sessions</button>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <button id="sessions" class="btn btn-neutral" style="padding:4px 8px; font-size:11px;">Sessions</button>
+          <button id="sidebar-close-mobile" class="btn btn-neutral mobile-only" style="padding:4px; border:none; background:transparent; color:var(--muted); display:none;">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
       </header>
 
       <div class="tabs">
         <button id="tab-setup" class="tab active">Setup</button>
         <button id="tab-work" class="tab">Workspace</button>
-        <button id="tab-terminal" class="tab">Terminal</button>
-        <button id="tab-graph" class="tab">Graph</button>
         <button id="tab-playground" class="tab">Playground</button>
         <button id="tab-settings" class="tab">Settings</button>
       </div>
@@ -34,8 +35,7 @@
       <section id="setup">
         <div class="card">
           <div style="font-weight:600; margin-bottom:8px; font-size:13px; color:var(--text)">Scenario</div>
-          <textarea id="scenario"
-            placeholder="Describe the task... (e.g., 'A debate between two philosophers about AI consciousness')"></textarea>
+          <textarea id="scenario" placeholder="Describe the task..."></textarea>
           <div class="row" style="margin-top:12px; align-items:end;">
             <div class="group" style="margin:0;">
               <label>Agents</label>
@@ -47,7 +47,7 @@
 
         <div class="group">
           <label>Goal</label>
-          <textarea id="goal" placeholder="The primary objective for the agents..."></textarea>
+          <textarea id="goal" placeholder="The primary objective..."></textarea>
         </div>
 
         <details>
@@ -83,48 +83,34 @@
         <details>
           <summary>Add Manual Bot</summary>
           <div style="margin-top:12px; display:flex; flex-direction:column; gap:8px;">
-            <input id="bot-title" placeholder="Name (e.g. Coder)" />
-            <textarea id="bot-description" placeholder="System prompt..." style="min-height:60px;"></textarea>
+            <input id="bot-title" placeholder="Name..." />
+            <textarea id="bot-description" placeholder="System prompt..."></textarea>
             <button id="bot-add" class="btn btn-neutral" style="align-self:end;">Add Bot</button>
           </div>
         </details>
 
         <div class="group" style="margin-top:16px;">
-          <div
-            style="font-weight:600; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; color:var(--text); font-size:13px;">
+          <div style="font-weight:600; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; color:var(--text); font-size:13px;">
             <span>Team Roster</span>
-            <span id="team-count" class="pill">0</span>
+            <span id="team-count" class="pill">0 members</span>
           </div>
           <div id="team"></div>
-        </div>
-
-        <div class="group" id="actions" style="margin-top:auto;"></div>
-        <div class="group">
-          <button id="export" class="btn btn-neutral" style="width:100%">Export Transcript</button>
         </div>
       </section>
 
       <section id="work" class="hidden">
         <div class="ws-actions">
           <div class="ws-upload">
-            <input id="file" type="file" style="display:none" onchange="document.getElementById('upload').click()" />
+            <input id="file" type="file" style="display:none" />
             <button onclick="document.getElementById('file').click()" class="btn btn-neutral">Choose File</button>
             <button id="upload" style="display:none"></button>
           </div>
           <div class="ws-buttons">
-            <button id="new-folder" class="btn btn-neutral" title="New Folder">＋</button>
-            <button id="refresh" class="btn btn-neutral" title="Refresh">↻</button>
+            <button id="refresh" class="btn btn-neutral">Refresh</button>
+            <button id="new-folder" class="btn btn-neutral">New Folder</button>
           </div>
         </div>
         <div class="tree" id="tree"></div>
-      </section>
-
-      <section id="terminal" class="hidden" style="padding:0; background:#000; display: flex; flex: 1;">
-        <div id="terminal-container" style="width:100%; height:100%"></div>
-      </section>
-
-      <section id="graph" class="hidden">
-        <div id="graph-container" style="background: var(--bg);"></div>
       </section>
 
       <section id="playground" class="hidden">
@@ -138,13 +124,11 @@
         </div>
         <div class="group">
           <label>Tools</label>
-          <div id="playground-tools" style="display: flex; flex-wrap: wrap; gap: 6px;"></div>
+          <div id="playground-tools" style="display:flex; flex-wrap:wrap; gap:6px;"></div>
         </div>
-        <div id="playground-chat-area"
-          style="flex: 1; overflow-y: auto; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-top: 10px;">
-        </div>
-        <form id="playground-form" style="display: flex; gap: 8px; margin-top: 10px;">
-          <input id="playground-input" placeholder="Type a message..." />
+        <div id="playground-chat-area" style="flex:1; overflow-y:auto; background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:12px; margin-top:10px;"></div>
+        <form id="playground-form" style="display:flex; gap:8px; margin-top:10px;">
+          <input id="playground-input" placeholder="Type a message..." style="flex:1" />
           <button id="playground-send" class="btn btn-primary">Send</button>
         </form>
       </section>
@@ -153,7 +137,7 @@
         <div class="group">
           <label>Model <span id="model-count" class="pill"></span></label>
           <div class="row2">
-            <select id="model"></select>
+            <select id="model" style="flex:1"></select>
             <button id="reloadModels" class="btn btn-neutral">Reload</button>
           </div>
           <div id="model-hint" style="color:var(--muted); font-size:11px; margin-top:4px"></div>
@@ -163,30 +147,32 @@
           <input id="default-temp" type="number" min="0" max="2" step="0.1" value="0.3" />
         </div>
       </section>
+
+      <div class="side-footer">
+        <div id="actions"></div>
+        <button id="export" class="btn btn-neutral" style="width:100%">Export Transcript</button>
+      </div>
     </nav>
 
     <main class="main">
       <header class="mobile-header">
-        <button id="sidebar-toggle" class="btn btn-neutral"
-          style="padding: 6px 10px; font-size: 18px; line-height: 1; border: none; background: transparent;">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-            stroke-linecap="round" stroke-linejoin="round">
+        <button id="sidebar-toggle" class="btn btn-neutral">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="3" y1="12" x2="21" y2="12"></line>
             <line x1="3" y1="6" x2="21" y2="6"></line>
             <line x1="3" y1="18" x2="21" y2="18"></line>
           </svg>
         </button>
-        <h1 style="margin: 0; font-size: 16px; flex: 1; text-align: center; color: white; letter-spacing: -0.02em;">
-          Agent Studio</h1>
-        <div style="width: 44px;"></div>
+        <h1>Agent Studio</h1>
+        <div style="width:44px;"></div>
       </header>
+
       <div id="chat"></div>
 
-      <!-- Thinking Dock -->
-      <div id="thinkdock">
+      <div id="thinkdock" style="display:none;">
         <div id="thinkhdr">
           <span class="title">Thinking</span>
-          <div style="display:flex;gap:6px;align-items:center">
+          <div style="display:flex; gap:6px; align-items:center">
             <span id="thinklen" class="pill">0 chars</span>
             <button id="thinkmin">Minimize</button>
             <button id="thinkclose">Close</button>
@@ -195,42 +181,44 @@
         <div id="thinkbody"></div>
       </div>
 
-      <div id="status">Status: Idle</div>
-      <form id="fbform">
-        <input id="fb" placeholder="Type message..." disabled autocomplete="off" />
-        <button id="send" class="btn btn-primary" disabled>Send</button>
-      </form>
+      <div class="footer">
+        <div id="status">Status: Idle</div>
+        <form id="fbform">
+          <input id="fb" placeholder="Type message..." disabled autocomplete="off" />
+          <button id="send" class="btn btn-primary" disabled>Send</button>
+        </form>
+      </div>
     </main>
   </div>
 
-  <!-- Sessions Modal -->
-  <div id="sessions-modal"
-    style="display:none; position:fixed; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:1000; align-items:center; justify-content:center; backdrop-filter: blur(2px);">
-    <div class="card" style="width:min(90%, 500px); padding:24px; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);">
+  <div id="sessions-modal" class="modal-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:2000; align-items:center; justify-content:center; backdrop-filter:blur(4px);">
+    <div class="card" style="width:min(90%, 500px); padding:24px;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
-        <h2 style="margin:0; font-size:16px;">Sessions</h2>
-        <button id="sessions-close" class="btn btn-neutral" style="padding:4px 8px;">✕</button>
+        <h2>Sessions</h2>
+        <button id="sessions-close" class="btn btn-neutral">x</button>
       </div>
-      <div id="sessions-list"
-        style="margin-bottom:20px; max-height:300px; overflow-y:auto; border: 1px solid var(--border); border-radius: 6px;">
-      </div>
+      <div id="sessions-list" style="margin-bottom:20px; max-height:300px; overflow-y:auto; border:1px solid var(--border); border-radius:6px;"></div>
       <div class="group">
         <label>Save Current</label>
         <div class="row2">
-          <input id="session-name" placeholder="Name..." />
+          <input id="session-name" placeholder="Name..." style="flex:1" />
           <button id="session-save" class="btn btn-primary">Save</button>
         </div>
       </div>
     </div>
   </div>
 
-  <div id="command-palette"
-    style="display: none; position: fixed; top: 15%; left: 50%; transform: translateX(-50%); z-index: 1000; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); width: 600px; overflow:hidden;">
-    <input id="command-input" type="text" placeholder="Type a command..."
-      style="width: 100%; padding: 16px; border:none; border-bottom: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 16px; outline:none;">
-    <ul id="command-list" style="list-style: none; padding: 0; margin: 0; max-height: 400px; overflow-y: auto;"></ul>
+  <div id="confirm-modal" class="modal-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:3000; align-items:center; justify-content:center; backdrop-filter:blur(4px);">
+    <div class="confirm-card">
+      <h3 id="confirm-title">Are you sure?</h3>
+      <p id="confirm-msg">This cannot be undone.</p>
+      <div class="confirm-actions">
+        <button id="confirm-cancel" class="btn btn-neutral">Cancel</button>
+        <button id="confirm-ok" class="btn btn-danger">Confirm</button>
+      </div>
+    </div>
   </div>
-  <script src="/static/js/main.js?v=11"></script>
-</body>
 
+  <script src="/static/js/main.js?v=12"></script>
+</body>
 </html>

@@ -2,10 +2,9 @@ import json
 from typing import Any, Dict, List
 from pydantic import BaseModel, Field
 from autogen_ext.models.openai import OpenAIChatCompletionClient
-from autogen_agentchat.messages import TextMessage
-from autogen_core.models import SystemMessage, UserMessage, ModelFamily
+from autogen_core.models import UserMessage
 
-from app.config import GEMINI_API_KEY, DEFAULT_MODEL
+from app.config import DEFAULT_MODEL, gemini_model_info, require_gemini_api_key
 
 # Pydantic models for structured output
 class AgentConfig(BaseModel):
@@ -22,11 +21,13 @@ async def generate_agents_from_scenario(scenario: str, model: str, num_agents: i
     with structured output (JSON schema).
     """
     # Use OpenAIChatCompletionClient for Gemini
+    model_name = model or DEFAULT_MODEL
     client = OpenAIChatCompletionClient(
-        model=model or DEFAULT_MODEL,
-        api_key=GEMINI_API_KEY,
+        model=model_name,
+        api_key=require_gemini_api_key(),
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-        temperature=0.1
+        temperature=0.1,
+        model_info=gemini_model_info(model_name),
     )
 
     prompt = f"""
