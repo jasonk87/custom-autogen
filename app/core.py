@@ -87,6 +87,7 @@ def _create_graph_payload(
             "type": "chat",
             "sender": message.source,
             "message": f"Tool output: {'; '.join(results)}",
+            "is_tool_execution": True,
         }
     elif isinstance(message, BaseChatMessage):
         txt = message.to_text().strip()

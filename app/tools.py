@@ -86,6 +86,31 @@ def tool_delete(path: str) -> str:
     return f"deleted {path}"
 
 
+def tool_share_file(path: str) -> str:
+    """
+    Returns the Markdown snippet to display or link to a file in the chat UI.
+    Use this to visually share an image or provide a download link for a file
+    that you have created or edited in the workspace.
+    """
+    fp = _safe_path(path)
+    if not os.path.exists(fp):
+        return f"Error: File '{path}' does not exist."
+    if os.path.isdir(fp):
+        return f"Error: '{path}' is a directory. Please provide a file."
+
+    # Extract the relative path from the workspace root to format the URL correctly
+    rel_path = os.path.relpath(fp, _safe_path("."))
+    url = f"/workspace/{rel_path}"
+
+    ext = os.path.splitext(fp)[1].lower()
+    if ext in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}:
+        return f"To share this image, output this exact markdown in your next message:\n![{os.path.basename(fp)}]({url})"
+    elif ext in {".mp4", ".webm"}:
+        return f"To share this video, output this exact HTML in your next message:\n<video controls src='{url}' width='100%'></video>"
+    else:
+        return f"To share this file, output this exact markdown in your next message:\n[{os.path.basename(fp)}]({url})"
+
+
 def execute_shell_command(command: str) -> str:
     """
     Executes a shell command in the workspace directory and returns the output.
@@ -164,6 +189,7 @@ TOOLS: Dict[str, Any] = {
     "write_file": tool_write_file,
     "replace_in_file": tool_replace_in_file,
     "delete": tool_delete,
+    "share_file": tool_share_file,
     "execute_shell_command": execute_shell_command,
     "execute_python": execute_python,
 }

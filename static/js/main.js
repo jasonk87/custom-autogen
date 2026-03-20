@@ -268,7 +268,10 @@ async function startRun() {
 
     const d = JSON.parse(ev.data);
     if (d.type === 'status') setStatus(d.state);
-    else if (d.type === 'chat') addMsg(d.sender, d.message);
+    else if (d.type === 'chat') {
+        addMsg(d.sender, d.message);
+        if (d.is_tool_execution) refreshTree();
+    }
     else if (d.type === 'stream_start') addMsg(d.sender, '', false, d.id);
     else if (d.type === 'token') appendToken(d.id, d.delta);
   };
