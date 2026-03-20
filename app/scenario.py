@@ -28,6 +28,7 @@ async def generate_agents_from_scenario(scenario: str, model: str, num_agents: i
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
         temperature=0.1,
         model_info=gemini_model_info(model_name),
+        response_format={"type": "json_object"},
     )
 
     prompt = f"""
@@ -35,7 +36,6 @@ You are an expert agent creator.
 Your task is to generate a list of {num_agents} agents that would be suitable for the following scenario:
 "{scenario}"
 
-The agents should have diverse roles and capabilities to effectively collaborate on the scenario.
 The agents should have diverse roles and capabilities to effectively collaborate on the scenario.
 Please generate a JSON object that conforms to the following schema:
 {AgentList.model_json_schema()}
@@ -85,12 +85,18 @@ And the following team of agents that has been created:
 
 Please generate a single, concise, and actionable "Team Goal" for this team to accomplish.
 The goal should be a clear instruction that can be given to the team to start their work.
-Please only output the goal as a single string.
+Please only output the goal as a single string in the following JSON format: {{"goal": "the goal"}}
 """
 
+    # For the goal, we still expect JSON because we set response_format={"type": "json_object"} on the client.
     goal_response = await client.create(
         messages=[UserMessage(content=goal_prompt, source="user")]
     )
-    suggested_goal = goal_response.content.strip()
+
+    try:
+        goal_data = json.loads(goal_response.content.strip())
+        suggested_goal = goal_data.get("goal", "")
+    except Exception:
+        suggested_goal = goal_response.content.strip()
 
     return agents, suggested_goal
