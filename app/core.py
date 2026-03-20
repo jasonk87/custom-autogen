@@ -156,6 +156,7 @@ async def run_orchestrator(
 
         participants = []
         manager_mode = manager_mode.lower()
+        live_coach_name = "Live_Coach"
 
         async def input_func(
             prompt: str = "",
@@ -184,6 +185,31 @@ async def run_orchestrator(
                 except Exception:
                     return "exit"
 
+        async def coach_input_func(
+            prompt: str = "",
+            cancellation_token: Optional[CancellationToken] = None,
+        ) -> str:
+            del prompt, cancellation_token
+            try:
+                coach_msg = state.coach_input_q.get_nowait()
+                if isinstance(coach_msg, str) and coach_msg.strip():
+                    out_q.put(
+                        json.dumps(
+                            {
+                                "type": "chat",
+                                "sender": "System",
+                                "message": "Live coach intervention delivered.",
+                            }
+                        )
+                    )
+                    return coach_msg.strip()
+            except queue.Empty:
+                pass
+            return "Approved"
+
+        live_coach_proxy = UserProxyAgent(name=live_coach_name, input_func=coach_input_func)
+        participants.append(live_coach_proxy)
+
         include_human_proxy = bool(human_proxy)
         if include_human_proxy:
             user_proxy = UserProxyAgent(name="Human_Admin", input_func=input_func)
@@ -201,7 +227,13 @@ async def run_orchestrator(
             participants.append(agent)
 
         selector_func = None
+        def pick_live_coach_if_waiting() -> str | None:
+            if not state.coach_input_q.empty():
+                return live_coach_name
+            return None
+
         if manager_mode in {"round_robin", "roundrobin"}:
+            rr_participants = [p for p in participants if p.name != live_coach_name]
 
             class RoundRobinSelector:
                 def __init__(self, participants):
@@ -209,16 +241,23 @@ async def run_orchestrator(
                     self.index = 0
 
                 def __call__(self, messages: Sequence[BaseAgentEvent | BaseChatMessage]) -> str | None:
+                    live = pick_live_coach_if_waiting()
+                    if live:
+                        return live
                     name = self.participants[self.index % len(self.participants)].name
                     self.index += 1
                     return name
 
-            selector_func = RoundRobinSelector(participants)
+            selector_func = RoundRobinSelector(rr_participants)
 
         elif manager_mode == "random":
+            random_participants = [p for p in participants if p.name != live_coach_name]
 
             def random_selector_func(messages: Sequence[BaseAgentEvent | BaseChatMessage]) -> str | None:
-                return random.choice(participants).name
+                live = pick_live_coach_if_waiting()
+                if live:
+                    return live
+                return random.choice(random_participants).name
 
             selector_func = random_selector_func
 
@@ -227,6 +266,10 @@ async def run_orchestrator(
             async def manual_selector_func(messages: Sequence[BaseAgentEvent | BaseChatMessage]) -> str | None:
                 out_q.put(json.dumps({"type": "status", "state": "waiting_for_manual_selection"}))
                 while True:
+                    live = pick_live_coach_if_waiting()
+                    if live:
+                        out_q.put(json.dumps({"type": "status", "state": "running"}))
+                        return live
                     if state.stop_event.is_set():
                         return None
                     try:
@@ -239,6 +282,15 @@ async def run_orchestrator(
                         return None
 
             selector_func = manual_selector_func
+        else:
+
+            def auto_with_live_coach_selector(
+                messages: Sequence[BaseAgentEvent | BaseChatMessage],
+            ) -> str | None:
+                del messages
+                return pick_live_coach_if_waiting()
+
+            selector_func = auto_with_live_coach_selector
 
         groupchat = SelectorGroupChat(
             participants=participants,

@@ -173,6 +173,19 @@ async def user_input():
     return jsonify({"ok": True})
 
 
+@app.post("/coach_input")
+async def coach_input():
+    data = await request.get_json()
+    msg = (data or {}).get("message")
+    if not isinstance(msg, str) or not msg.strip():
+        return jsonify({"error": "missing_message"}), 400
+    try:
+        state.coach_input_q.put_nowait(msg.strip())
+    except Exception:
+        pass
+    return jsonify({"ok": True})
+
+
 @app.post("/choose_next")
 async def choose_next():
     data = await request.get_json()

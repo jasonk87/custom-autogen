@@ -1,6 +1,7 @@
 import pytest
 import pytest_asyncio
 from app.server import app
+from app.state import state
 
 @pytest_asyncio.fixture
 async def client():
@@ -30,3 +31,19 @@ async def test_tools_endpoint(client):
     assert resp.status_code == 200
     data = await resp.get_json()
     assert isinstance(data, list)
+
+
+async def test_coach_input_enqueues_message(client):
+    while not state.coach_input_q.empty():
+        state.coach_input_q.get_nowait()
+
+    resp = await client.post("/coach_input", json={"message": "stay on track"})
+    assert resp.status_code == 200
+    data = await resp.get_json()
+    assert data.get("ok") is True
+    assert state.coach_input_q.get_nowait() == "stay on track"
+
+
+async def test_coach_input_rejects_empty_message(client):
+    resp = await client.post("/coach_input", json={"message": "   "})
+    assert resp.status_code == 400

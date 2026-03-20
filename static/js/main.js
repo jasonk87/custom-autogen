@@ -5,6 +5,7 @@ let agents = [];
 let streams = {};
 let es = null;
 let runActive = false;
+let currentStatus = 'idle';
 const think = { active: false, buffer: '', open: false, minimized: false };
 const playgroundState = { toolNames: [] };
 const SESSION_KEY = 'agentStudioSession';
@@ -29,6 +30,7 @@ function toast(msg) {
 }
 
 function setStatus(state) {
+  currentStatus = state;
   const status = $('#status');
   if (!status) return;
   const map = {
@@ -42,10 +44,15 @@ function setStatus(state) {
 
   const fb = $('#fb');
   const send = $('#send');
-  const enabled = state === 'waiting_for_input';
+  const enabled = runActive;
   if (fb) fb.disabled = !enabled;
   if (send) send.disabled = !enabled;
-  if (enabled && fb) fb.focus();
+  if (state === 'waiting_for_input' && fb) fb.focus();
+  if (fb) {
+    fb.placeholder = state === 'waiting_for_input'
+      ? 'Type required input...'
+      : 'Type message (live coaching while agents run)...';
+  }
 }
 
 function addMsg(sender, text, mine = false, id = null, target = '#chat') {
@@ -644,11 +651,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   $('#fbform').onsubmit = async (e) => {
     e.preventDefault();
+    if (!runActive) return;
     const value = $('#fb').value.trim();
     if (!value) return;
 
     addMsg('You', value, true);
-    await fetch('/user_input', {
+    const endpoint = currentStatus === 'waiting_for_input' ? '/user_input' : '/coach_input';
+    await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: value })
