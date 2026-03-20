@@ -596,25 +596,16 @@ summary:hover {
 
 /* Workspace Tab Styles */
 .ws-actions {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
-  justify-content: space-between;
-  align-items: center;
   padding-bottom: 20px;
   border-bottom: 1px solid var(--border);
   margin-bottom: 10px;
 }
 
-.ws-upload {
-  display: flex;
-  gap: 8px;
-}
-
-.ws-buttons {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+.ws-actions button {
+  width: 100%;
 }
 
 .tree {
