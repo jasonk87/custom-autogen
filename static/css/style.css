@@ -597,6 +597,8 @@ summary:hover {
 /* Workspace Tab Styles */
 .ws-actions {
   display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   justify-content: space-between;
   align-items: center;
   padding-bottom: 20px;
@@ -611,6 +613,7 @@ summary:hover {
 
 .ws-buttons {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
