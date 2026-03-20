@@ -203,17 +203,25 @@ async def run_orchestrator(
                             }
                         )
                     )
-                    return coach_msg.strip()
+                    return f"--- REAL-TIME USER STEERING ---\n{coach_msg.strip()}\n\nAgents: You MUST address this feedback immediately and adjust your plan if necessary."
             except queue.Empty:
                 pass
-            return "Approved"
+            return "No real-time intervention. Continue with your current plan."
 
-        live_coach_proxy = UserProxyAgent(name=live_coach_name, input_func=coach_input_func)
+        live_coach_proxy = UserProxyAgent(
+            name=live_coach_name,
+            description="System agent for injecting real-time user steering. DO NOT SELECT THIS AGENT manually; it is triggered automatically when the user interrupts.",
+            input_func=coach_input_func,
+        )
         participants.append(live_coach_proxy)
 
         include_human_proxy = bool(human_proxy)
         if include_human_proxy:
-            user_proxy = UserProxyAgent(name="Human_Admin", input_func=input_func)
+            user_proxy = UserProxyAgent(
+                name="Human_Admin",
+                description="The human user who started the task. You MUST select this agent when you need approval, feedback, clarification, or to present the final outcome.",
+                input_func=input_func,
+            )
             participants.append(user_proxy)
 
         for agent_cfg in agents_cfg:
