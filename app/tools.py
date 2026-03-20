@@ -5,7 +5,7 @@ from typing import Any, Dict
 
 from app.config import WORKSPACE_DIR
 from app.state import state
-from app.utils import _safe_path
+from app.utils import _safe_path, execute_python
 
 
 def tool_listdir(path: str = ".") -> Dict[str, Any]:
@@ -55,6 +55,7 @@ def tool_delete(path: str) -> str:
 def execute_shell_command(command: str) -> str:
     """
     Executes a shell command in the workspace directory and returns the output.
+    Useful for running programs, tests, linters, and other command-line tools.
 
     Args:
         command: The shell command to execute.
@@ -129,4 +130,5 @@ TOOLS: Dict[str, Any] = {
     "write_file": tool_write_file,
     "delete": tool_delete,
     "execute_shell_command": execute_shell_command,
+    "execute_python": execute_python,
 }
