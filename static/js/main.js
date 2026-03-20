@@ -700,6 +700,26 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('#export').onclick = exportTranscript;
   $('#tree').onclick = onTreeClick;
   $('#refresh').onclick = refreshTree;
+
+  $('#mount-workspace').onclick = async () => {
+    const path = $('#workspace-mount-path').value.trim();
+    if (!path) return;
+
+    const r = await fetch('/api/workspace/set_directory', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path })
+    });
+
+    const d = await r.json();
+    if (r.ok) {
+      toast('Workspace mounted successfully.');
+      await refreshTree();
+    } else {
+      toast(d.message || d.error || 'Failed to mount workspace.');
+    }
+  };
+
   $('#reloadModels').onclick = async () => {
     await loadModels();
     saveSession();

@@ -1,6 +1,7 @@
 import os
 import shutil
 import subprocess
+import ast
 from typing import Any, Dict
 
 from app.config import WORKSPACE_DIR
@@ -41,6 +42,39 @@ def tool_write_file(path: str, content: str, overwrite: bool = True) -> str:
     with open(fp, "w", encoding="utf-8") as f:
         f.write(content)
     return f"wrote {len(content)} bytes to {path}"
+
+
+def tool_replace_in_file(path: str, search_string: str, replace_string: str) -> str:
+    """
+    Replaces an exact `search_string` with `replace_string` in the specified file.
+    Use this to edit existing files instead of overwriting them completely with `write_file`.
+    If the file is a Python file (.py), it also performs syntax checking on the new content.
+    If a SyntaxError is detected, the change is reverted and the error is returned.
+    """
+    fp = _safe_path(path)
+    if not os.path.exists(fp):
+        return f"Error: File '{path}' does not exist."
+    if os.path.isdir(fp):
+        return f"Error: '{path}' is a directory, not a file."
+
+    with open(fp, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    if search_string not in content:
+        return "Error: The `search_string` was not found in the file. Please make sure the search string matches the file content exactly."
+
+    new_content = content.replace(search_string, replace_string)
+
+    if fp.endswith(".py"):
+        try:
+            ast.parse(new_content)
+        except SyntaxError as e:
+            return f"SyntaxError in new content: {e}. The file was not changed."
+
+    with open(fp, "w", encoding="utf-8") as f:
+        f.write(new_content)
+
+    return f"Successfully replaced occurrences of the search string in {path}."
 
 
 def tool_delete(path: str) -> str:
@@ -128,6 +162,7 @@ TOOLS: Dict[str, Any] = {
     "listdir": tool_listdir,
     "read_file": tool_read_file,
     "write_file": tool_write_file,
+    "replace_in_file": tool_replace_in_file,
     "delete": tool_delete,
     "execute_shell_command": execute_shell_command,
     "execute_python": execute_python,

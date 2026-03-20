@@ -367,6 +367,23 @@ async def api_delete_file():
         return jsonify({"error": "os_error", "message": str(e)}), 500
 
 
+@app.post("/api/workspace/set_directory")
+async def api_set_directory():
+    data = await request.get_json()
+    path = (data or {}).get("path")
+    if not path:
+        return jsonify({"error": "missing_path"}), 400
+
+    target_path = os.path.abspath(path)
+    if not os.path.exists(target_path):
+        return jsonify({"error": "not_found", "message": "Path does not exist"}), 404
+    if not os.path.isdir(target_path):
+        return jsonify({"error": "not_a_directory", "message": "Path is not a directory"}), 400
+
+    state.active_workspace = target_path
+    return jsonify({"ok": True, "workspace": target_path})
+
+
 @app.post("/api/workspace/new_folder")
 async def api_new_folder():
     data = await request.get_json()
