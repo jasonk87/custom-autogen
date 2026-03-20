@@ -729,6 +729,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     toast('Models refreshed.');
   };
 
+  $('#new-file').onclick = async () => {
+    const p = prompt('File name:');
+    if (!p) return;
+    await fetch('/api/workspace/file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: p, content: '' })
+    });
+    await refreshTree();
+  };
+
   $('#new-folder').onclick = async () => {
     const p = prompt('Folder name:');
     if (!p) return;

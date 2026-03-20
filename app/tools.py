@@ -2,6 +2,7 @@ import os
 import shutil
 import subprocess
 import ast
+import httpx
 from typing import Any, Dict
 
 from app.config import WORKSPACE_DIR
@@ -111,6 +112,26 @@ def tool_share_file(path: str) -> str:
         return f"To share this file, output this exact markdown in your next message:\n[{os.path.basename(fp)}]({url})"
 
 
+def tool_fetch_webpage(url: str) -> str:
+    """
+    Fetches the text content of a webpage via HTTP GET.
+    Useful for reading external documentation, APIs, or website content.
+    """
+    try:
+        with httpx.Client(timeout=10.0, follow_redirects=True) as client:
+            response = client.get(url)
+            response.raise_for_status()
+
+            # Return text directly; if it's HTML, the LLM is usually smart enough to read the raw source.
+            # Truncate at 20000 chars to avoid blowing up the context window.
+            text = response.text
+            return text[:20000] + ("\n...[content truncated]..." if len(text) > 20000 else "")
+    except httpx.HTTPError as exc:
+        return f"Error fetching {url}: {exc}"
+    except Exception as e:
+        return f"Unexpected error fetching {url}: {e}"
+
+
 def execute_shell_command(command: str) -> str:
     """
     Executes a shell command in the workspace directory and returns the output.
@@ -190,6 +211,7 @@ TOOLS: Dict[str, Any] = {
     "replace_in_file": tool_replace_in_file,
     "delete": tool_delete,
     "share_file": tool_share_file,
+    "fetch_webpage": tool_fetch_webpage,
     "execute_shell_command": execute_shell_command,
     "execute_python": execute_python,
 }
