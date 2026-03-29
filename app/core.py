@@ -119,6 +119,7 @@ async def run_orchestrator(
     max_turns: int = 60,
     human_proxy: bool = False,
     temperature: float = 0.3,
+    allow_tools: bool = True,
 ):
     try:
         model_name = model or DEFAULT_MODEL
@@ -203,7 +204,7 @@ async def run_orchestrator(
                 "model_client_stream": False,
                 "reflect_on_tool_use": False,
             }
-            if supports_tools:
+            if supports_tools and allow_tools:
                 agent_kwargs["tools"] = list(TOOLS.values())
 
             agent = AssistantAgent(**agent_kwargs)

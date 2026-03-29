@@ -1,0 +1,5 @@
+{
+  "selected_model": "ollama::remote::llama3.1:8b",
+  "ollama_local_url": "http://127.0.0.1:11434",
+  "ollama_remote_url": "http://192.168.86.30:11434"
+}

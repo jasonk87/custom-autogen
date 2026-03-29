@@ -63,7 +63,7 @@ def _resolve_workspace_path(path: str) -> str:
     return target_path
 
 
-def _run_orchestrator_thread(goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy, temperature):
+def _run_orchestrator_thread(goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy, temperature, allow_tools):
     try:
         asyncio.run(
             run_orchestrator(
@@ -75,6 +75,7 @@ def _run_orchestrator_thread(goal, model, agents_cfg, manager_mode, out_q, max_t
                 max_turns,
                 human_proxy,
                 temperature,
+                allow_tools,
             )
         )
     except (asyncio.CancelledError, KeyboardInterrupt):
@@ -99,6 +100,7 @@ async def stream():
     max_turns = int(request.args.get("turns", "60"))
     human_proxy = request.args.get("human_proxy", "false").lower() == "true"
     temperature = float(request.args.get("temperature", "0.3"))
+    allow_tools = request.args.get("allow_tools", "true").lower() == "true"
 
     try:
         goal = base64.b64decode(goal_b64.encode()).decode(errors="ignore") if goal_b64 else ""
@@ -111,7 +113,7 @@ async def stream():
         agents_cfg = []
 
     out_q: "queue.Queue[str]" = queue.Queue()
-    thread_args = (goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy, temperature)
+    thread_args = (goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy, temperature, allow_tools)
     state.start(_run_orchestrator_thread, thread_args)
 
     async def gen():

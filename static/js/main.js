@@ -253,7 +253,8 @@ async function startRun() {
     agents: btoa(JSON.stringify(agents)),
     manager_mode: $('#mode').value,
     turns: $('#turns').value,
-    temperature: $('#temperature').value
+    temperature: $('#temperature').value,
+    allow_tools: $('#allow-tools').checked
   });
 
   es = new EventSource(`/stream?${params.toString()}`);
@@ -310,7 +311,8 @@ function saveSession() {
       model: $('#model').value,
       mode: $('#mode').value,
       turns: $('#turns').value,
-      temperature: $('#temperature').value
+      temperature: $('#temperature').value,
+      allow_tools: $('#allow-tools').checked
     }
   };
   localStorage.setItem(SESSION_KEY, JSON.stringify(s));
@@ -326,6 +328,7 @@ function loadSession() {
     if (s.settings.mode) $('#mode').value = s.settings.mode;
     if (s.settings.turns) $('#turns').value = s.settings.turns;
     if (s.settings.temperature) $('#temperature').value = s.settings.temperature;
+    if (s.settings.allow_tools !== undefined) $('#allow-tools').checked = s.settings.allow_tools;
   }
 }
 
@@ -345,6 +348,7 @@ function applySavedSettings() {
   if (settings.mode) $('#mode').value = settings.mode;
   if (settings.turns) $('#turns').value = settings.turns;
   if (settings.temperature) $('#temperature').value = settings.temperature;
+  if (settings.allow_tools !== undefined) $('#allow-tools').checked = settings.allow_tools;
 }
 
 function clearDraftKeepSettings() {
@@ -486,7 +490,8 @@ async function saveCurrentSessionToServer() {
       model: $('#model').value,
       mode: $('#mode').value,
       turns: $('#turns').value,
-      temperature: $('#temperature').value
+      temperature: $('#temperature').value,
+      allow_tools: $('#allow-tools').checked
     }
   };
 
@@ -710,6 +715,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (d.settings.mode) $('#mode').value = d.settings.mode;
         if (d.settings.turns) $('#turns').value = d.settings.turns;
         if (d.settings.temperature) $('#temperature').value = d.settings.temperature;
+        if (d.settings.allow_tools !== undefined) $('#allow-tools').checked = d.settings.allow_tools;
       }
       renderTeam();
       saveSession();
