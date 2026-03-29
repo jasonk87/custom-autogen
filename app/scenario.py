@@ -22,7 +22,7 @@ async def generate_agents_from_scenario(scenario: str, model: str, num_agents: i
     # Use get_model_client to get either Gemini or Ollama client
     model_name = model or DEFAULT_MODEL
     client = get_model_client(
-        model_name, 
+        model_name,
         temperature=0.1
     )
 

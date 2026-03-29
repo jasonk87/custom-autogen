@@ -227,13 +227,13 @@ async def set_ollama():
     data = await request.get_json() or {}
     local_url = data.get("local_url", "").strip()
     remote_url = data.get("remote_url", "").strip()
-    
+
     updates = {}
     if local_url:
         updates["ollama_local_url"] = local_url
     if remote_url:
         updates["ollama_remote_url"] = remote_url
-        
+
     save_user_settings(updates)
     return jsonify({"ok": True, "message": "Ollama settings saved."})
 

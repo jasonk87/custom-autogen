@@ -356,7 +356,7 @@ async function loadModels() {
   const r = await fetch('/api/models');
   const models = await r.json();
   const sel = $('#model');
-  
+
   const groups = {
     'Google': models.filter(m => m.provider === 'gemini'),
     'Local Ollama': models.filter(m => m.source === 'local'),
