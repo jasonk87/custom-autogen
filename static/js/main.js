@@ -1,4 +1,4 @@
-﻿const $ = (s) => document.querySelector(s);
+const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 
 let agents = [];
@@ -356,17 +356,41 @@ async function loadModels() {
   const r = await fetch('/api/models');
   const models = await r.json();
   const sel = $('#model');
-  sel.innerHTML = models.map(m => `<option>${m}</option>`).join('');
+  
+  const groups = {
+    'Google': models.filter(m => m.provider === 'gemini'),
+    'Local Ollama': models.filter(m => m.source === 'local'),
+    'Remote Ollama': models.filter(m => m.source === 'remote'),
+  };
+
+  let html = '';
+  for (const [groupName, groupModels] of Object.entries(groups)) {
+    if (groupModels.length > 0) {
+      html += `<optgroup label="${groupName}">` + groupModels.map(m => `<option value="${m.value}">${m.label}</option>`).join('') + `</optgroup>`;
+    }
+  }
+
+  sel.innerHTML = html;
   $('#model-count').textContent = `${models.length}`;
   $('#model-hint').textContent = models.length ? `Loaded ${models.length} model options.` : 'No models loaded.';
 
   const savedSettings = getSavedSettings();
-  if (savedSettings.model && models.includes(savedSettings.model)) {
+  const values = models.map(m => m.value);
+  if (savedSettings.model && values.includes(savedSettings.model)) {
     sel.value = savedSettings.model;
-  } else if (models.includes('gemini-2.0-flash')) {
-    sel.value = 'gemini-2.0-flash';
-  } else if (models.length > 0) {
-    sel.value = models[0];
+  } else if (values.find(v => v.includes('gemini-2.0-flash'))) {
+    sel.value = values.find(v => v.includes('gemini-2.0-flash'));
+  } else if (values.length > 0) {
+    sel.value = values[0];
+  }
+}
+
+async function loadOllamaSettings() {
+  const r = await fetch('/api/settings/ollama');
+  if (r.ok) {
+    const d = await r.json();
+    if ($('#ollama-local-url')) $('#ollama-local-url').value = d.local_url || '';
+    if ($('#ollama-remote-url')) $('#ollama-remote-url').value = d.remote_url || '';
   }
 }
 
@@ -789,8 +813,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('#temperature').addEventListener('change', saveSession);
   $('#model').addEventListener('change', saveSession);
 
+  const saveOllamaBtn = $('#save-ollama-config');
+  if (saveOllamaBtn) {
+    saveOllamaBtn.onclick = async () => {
+      const local_url = $('#ollama-local-url').value.trim();
+      const remote_url = $('#ollama-remote-url').value.trim();
+      const r = await fetch('/api/settings/ollama', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ local_url, remote_url })
+      });
+      if (r.ok) {
+        toast('Ollama settings saved.');
+        await loadModels();
+      } else {
+        toast('Failed to save Ollama settings.');
+      }
+    };
+  }
+
   applySavedSettings();
   clearDraftKeepSettings();
+  await loadOllamaSettings();
   await loadModels();
   renderTeam();
   setStatus('idle');

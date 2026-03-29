@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import json
 import queue
 import random
@@ -15,37 +15,12 @@ from autogen_agentchat.messages import (
 )
 from autogen_agentchat.teams import SelectorGroupChat
 from autogen_core import CancellationToken
-from autogen_ext.models.openai import OpenAIChatCompletionClient
 
 from app import log
-from app.config import DEFAULT_MODEL, gemini_model_info, require_gemini_api_key
+from app.config import DEFAULT_MODEL
 from app.state import state
 from app.tools import TOOLS
-
-
-class SafeOpenAIChatCompletionClient(OpenAIChatCompletionClient):
-    """Wraps model errors with clearer Gemini-specific guidance."""
-
-    async def create(self, messages, **kwargs):
-        try:
-            return await super().create(messages, **kwargs)
-        except asyncio.CancelledError:
-            log.info(
-                "model_client_cancelled",
-                extra={"detail": "Model client creation cancelled (likely session stop)"},
-            )
-            raise
-        except Exception as e:
-            error_str = str(e)
-            if "'NoneType' object is not subscriptable" in error_str:
-                log.error("gemini_api_crash", extra={"reason": "Received empty choices from API"})
-                raise RuntimeError(
-                    "Gemini API Error: The model returned an empty response. "
-                    "This usually indicates a safety filter trigger or invalid API key."
-                ) from e
-
-            log.error("model_client_error", extra={"error": error_str, "type": type(e).__name__})
-            raise
+from app.model_providers import get_model_client, model_supports_tools
 
 
 def _create_graph_payload(
@@ -147,13 +122,7 @@ async def run_orchestrator(
 ):
     try:
         model_name = model or DEFAULT_MODEL
-        gemini_client = SafeOpenAIChatCompletionClient(
-            model=model_name,
-            api_key=require_gemini_api_key(),
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-            temperature=temperature,
-            model_info=gemini_model_info(model_name),
-        )
+        gemini_client = get_model_client(model_name, temperature=temperature)
 
         participants = []
         manager_mode = manager_mode.lower()
@@ -224,15 +193,20 @@ async def run_orchestrator(
             )
             participants.append(user_proxy)
 
+        supports_tools = model_supports_tools(model_name)
+
         for agent_cfg in agents_cfg:
-            agent = AssistantAgent(
-                name=agent_cfg["name"],
-                model_client=gemini_client,
-                system_message=agent_cfg.get("system", "You are a helpful assistant."),
-                model_client_stream=False,
-                reflect_on_tool_use=False,
-                tools=list(TOOLS.values()),
-            )
+            agent_kwargs = {
+                "name": agent_cfg["name"],
+                "model_client": gemini_client,
+                "system_message": agent_cfg.get("system", "You are a helpful assistant."),
+                "model_client_stream": False,
+                "reflect_on_tool_use": False,
+            }
+            if supports_tools:
+                agent_kwargs["tools"] = list(TOOLS.values())
+
+            agent = AssistantAgent(**agent_kwargs)
             participants.append(agent)
 
         selector_func = None
@@ -351,7 +325,10 @@ async def run_orchestrator(
         out_q.put(json.dumps({"type": "status", "state": "idle"}))
 
     except Exception as e:
-        out_q.put(json.dumps({"type": "chat", "sender": "Error", "message": f"{type(e).__name__}: {e}"}))
+        error_str = str(e)
+        if "'NoneType' object is not subscriptable" in error_str:
+            error_str = "API Error: The model returned an empty response. This usually indicates a safety filter trigger or invalid configuration."
+        out_q.put(json.dumps({"type": "chat", "sender": "Error", "message": f"{type(e).__name__}: {error_str}"}))
         log.error("orchestrator_error", exc_info=e)
     finally:
         out_q.put("[DONE]")
