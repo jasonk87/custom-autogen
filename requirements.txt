@@ -5,3 +5,4 @@ httpx
 werkzeug
 python-dotenv
 hypercorn
+ollama

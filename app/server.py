@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import base64
 import json
 import os
@@ -31,6 +31,7 @@ from app.scenario import generate_agents_from_scenario
 from app.state import state
 from app.tools import TOOLS
 from app.utils import tree_listing
+from app.model_providers import get_available_models, get_model_client, load_user_settings, save_user_settings
 
 
 app_dir = os.path.dirname(os.path.abspath(__file__))
@@ -214,28 +215,33 @@ async def scenario_generate():
         return jsonify({"error": str(e)}), 500
 
 
-@app.post("/api/settings/ollama")
+@app.route("/api/settings/ollama", methods=["GET", "POST"])
 async def set_ollama():
-    return jsonify({"ok": True, "message": "Ollama support has been replaced with Gemini."})
+    if request.method == "GET":
+        settings = load_user_settings()
+        return jsonify({
+            "local_url": settings.get("ollama_local_url", "http://127.0.0.1:11434"),
+            "remote_url": settings.get("ollama_remote_url", "http://192.168.86.30:11434")
+        })
+
+    data = await request.get_json() or {}
+    local_url = data.get("local_url", "").strip()
+    remote_url = data.get("remote_url", "").strip()
+
+    updates = {}
+    if local_url:
+        updates["ollama_local_url"] = local_url
+    if remote_url:
+        updates["ollama_remote_url"] = remote_url
+
+    save_user_settings(updates)
+    return jsonify({"ok": True, "message": "Ollama settings saved."})
 
 
 @app.get("/api/models")
 async def api_models():
-    return jsonify(
-        [
-            "gemini-3.1-pro",
-            "gemini-3.1-flash",
-            "gemini-3.1-flash-lite",
-            "gemini-2.5-pro",
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
-            "gemini-2.0-flash",
-            "gemini-2.0-flash-lite",
-            "gemini-1.5-pro",
-            "gemini-1.5-flash",
-            "gemini-1.5-flash-8b",
-        ]
-    )
+    models = await get_available_models()
+    return jsonify(models)
 
 
 @app.get("/api/tools")
@@ -260,19 +266,14 @@ async def api_agent_run():
         return jsonify({"reply": f"Test reply: {message}"})
 
     try:
-        gemini_client = OpenAIChatCompletionClient(
-            model=model,
-            api_key=require_gemini_api_key(),
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-            model_info=gemini_model_info(model),
-        )
+        model_client = get_model_client(model, temperature=0.3)
 
         selected_tool_names = agent_config.get("tools", [])
         selected_tools = [TOOLS[name] for name in selected_tool_names if name in TOOLS]
 
         agent = AssistantAgent(
             name=agent_config.get("name", "playground_agent"),
-            model_client=gemini_client,
+            model_client=model_client,
             system_message=agent_config.get("system_message", "You are a helpful assistant."),
             model_client_stream=False,
             tools=selected_tools,
@@ -367,6 +368,23 @@ async def api_delete_file():
         return jsonify({"error": "not_found"}), 404
     except OSError as e:
         return jsonify({"error": "os_error", "message": str(e)}), 500
+
+
+@app.post("/api/workspace/set_directory")
+async def api_set_directory():
+    data = await request.get_json()
+    path = (data or {}).get("path")
+    if not path:
+        return jsonify({"error": "missing_path"}), 400
+
+    target_path = os.path.abspath(path)
+    if not os.path.exists(target_path):
+        return jsonify({"error": "not_found", "message": "Path does not exist"}), 404
+    if not os.path.isdir(target_path):
+        return jsonify({"error": "not_a_directory", "message": "Path is not a directory"}), 400
+
+    state.active_workspace = target_path
+    return jsonify({"ok": True, "workspace": target_path})
 
 
 @app.post("/api/workspace/new_folder")

@@ -1,10 +1,9 @@
 import json
 from typing import Any, Dict, List
 from pydantic import BaseModel, Field
-from autogen_ext.models.openai import OpenAIChatCompletionClient
 from autogen_core.models import UserMessage
-
-from app.config import DEFAULT_MODEL, gemini_model_info, require_gemini_api_key
+from app.config import DEFAULT_MODEL
+from app.model_providers import get_model_client
 
 # Pydantic models for structured output
 class AgentConfig(BaseModel):
@@ -20,14 +19,11 @@ async def generate_agents_from_scenario(scenario: str, model: str, num_agents: i
     Generates a list of agents from a scenario description using an LLM
     with structured output (JSON schema).
     """
-    # Use OpenAIChatCompletionClient for Gemini
+    # Use get_model_client to get either Gemini or Ollama client
     model_name = model or DEFAULT_MODEL
-    client = OpenAIChatCompletionClient(
-        model=model_name,
-        api_key=require_gemini_api_key(),
-        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-        temperature=0.1,
-        model_info=gemini_model_info(model_name),
+    client = get_model_client(
+        model_name,
+        temperature=0.1
     )
 
     prompt = f"""
@@ -36,9 +32,17 @@ Your task is to generate a list of {num_agents} agents that would be suitable fo
 "{scenario}"
 
 The agents should have diverse roles and capabilities to effectively collaborate on the scenario.
-The agents should have diverse roles and capabilities to effectively collaborate on the scenario.
-Please generate a JSON object that conforms to the following schema:
-{AgentList.model_json_schema()}
+You MUST output ONLY a valid JSON object representing the agents. Follow this exact structure:
+{{
+  "agents": [
+    {{
+      "name": "Programmer_Bob",
+      "system": "You are a skilled programmer...",
+      "temperature": 0.3
+    }}
+  ]
+}}
+Do NOT output the JSON schema. Output the actual instantiated agents!
 """
 
     # We need to manually enforce JSON output since OpenAIChatCompletionClient might not support `format='json'` directly in the same way as Ollama client or it might differ.
@@ -85,12 +89,18 @@ And the following team of agents that has been created:
 
 Please generate a single, concise, and actionable "Team Goal" for this team to accomplish.
 The goal should be a clear instruction that can be given to the team to start their work.
-Please only output the goal as a single string.
+Please only output the goal as a single string in the following JSON format: {{"goal": "the goal"}}
 """
 
+    # For the goal, we still expect JSON because we set response_format={"type": "json_object"} on the client.
     goal_response = await client.create(
         messages=[UserMessage(content=goal_prompt, source="user")]
     )
-    suggested_goal = goal_response.content.strip()
+
+    try:
+        goal_data = json.loads(goal_response.content.strip())
+        suggested_goal = goal_data.get("goal", "")
+    except Exception:
+        suggested_goal = goal_response.content.strip()
 
     return agents, suggested_goal

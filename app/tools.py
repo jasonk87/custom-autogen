@@ -1,11 +1,13 @@
 import os
 import shutil
 import subprocess
+import ast
+import httpx
 from typing import Any, Dict
 
 from app.config import WORKSPACE_DIR
 from app.state import state
-from app.utils import _safe_path
+from app.utils import _safe_path, execute_python
 
 
 def tool_listdir(path: str = ".") -> Dict[str, Any]:
@@ -43,6 +45,39 @@ def tool_write_file(path: str, content: str, overwrite: bool = True) -> str:
     return f"wrote {len(content)} bytes to {path}"
 
 
+def tool_replace_in_file(path: str, search_string: str, replace_string: str) -> str:
+    """
+    Replaces an exact `search_string` with `replace_string` in the specified file.
+    Use this to edit existing files instead of overwriting them completely with `write_file`.
+    If the file is a Python file (.py), it also performs syntax checking on the new content.
+    If a SyntaxError is detected, the change is reverted and the error is returned.
+    """
+    fp = _safe_path(path)
+    if not os.path.exists(fp):
+        return f"Error: File '{path}' does not exist."
+    if os.path.isdir(fp):
+        return f"Error: '{path}' is a directory, not a file."
+
+    with open(fp, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    if search_string not in content:
+        return "Error: The `search_string` was not found in the file. Please make sure the search string matches the file content exactly."
+
+    new_content = content.replace(search_string, replace_string)
+
+    if fp.endswith(".py"):
+        try:
+            ast.parse(new_content)
+        except SyntaxError as e:
+            return f"SyntaxError in new content: {e}. The file was not changed."
+
+    with open(fp, "w", encoding="utf-8") as f:
+        f.write(new_content)
+
+    return f"Successfully replaced occurrences of the search string in {path}."
+
+
 def tool_delete(path: str) -> str:
     fp = _safe_path(path)
     if os.path.isdir(fp):
@@ -52,9 +87,55 @@ def tool_delete(path: str) -> str:
     return f"deleted {path}"
 
 
+def tool_share_file(path: str) -> str:
+    """
+    Returns the Markdown snippet to display or link to a file in the chat UI.
+    Use this to visually share an image or provide a download link for a file
+    that you have created or edited in the workspace.
+    """
+    fp = _safe_path(path)
+    if not os.path.exists(fp):
+        return f"Error: File '{path}' does not exist."
+    if os.path.isdir(fp):
+        return f"Error: '{path}' is a directory. Please provide a file."
+
+    # Extract the relative path from the workspace root to format the URL correctly
+    rel_path = os.path.relpath(fp, _safe_path("."))
+    url = f"/workspace/{rel_path}"
+
+    ext = os.path.splitext(fp)[1].lower()
+    if ext in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}:
+        return f"To share this image, output this exact markdown in your next message:\n![{os.path.basename(fp)}]({url})"
+    elif ext in {".mp4", ".webm"}:
+        return f"To share this video, output this exact HTML in your next message:\n<video controls src='{url}' width='100%'></video>"
+    else:
+        return f"To share this file, output this exact markdown in your next message:\n[{os.path.basename(fp)}]({url})"
+
+
+def tool_fetch_webpage(url: str) -> str:
+    """
+    Fetches the text content of a webpage via HTTP GET.
+    Useful for reading external documentation, APIs, or website content.
+    """
+    try:
+        with httpx.Client(timeout=10.0, follow_redirects=True) as client:
+            response = client.get(url)
+            response.raise_for_status()
+
+            # Return text directly; if it's HTML, the LLM is usually smart enough to read the raw source.
+            # Truncate at 20000 chars to avoid blowing up the context window.
+            text = response.text
+            return text[:20000] + ("\n...[content truncated]..." if len(text) > 20000 else "")
+    except httpx.HTTPError as exc:
+        return f"Error fetching {url}: {exc}"
+    except Exception as e:
+        return f"Unexpected error fetching {url}: {e}"
+
+
 def execute_shell_command(command: str) -> str:
     """
     Executes a shell command in the workspace directory and returns the output.
+    Useful for running programs, tests, linters, and other command-line tools.
 
     Args:
         command: The shell command to execute.
@@ -127,6 +208,10 @@ TOOLS: Dict[str, Any] = {
     "listdir": tool_listdir,
     "read_file": tool_read_file,
     "write_file": tool_write_file,
+    "replace_in_file": tool_replace_in_file,
     "delete": tool_delete,
+    "share_file": tool_share_file,
+    "fetch_webpage": tool_fetch_webpage,
     "execute_shell_command": execute_shell_command,
+    "execute_python": execute_python,
 }

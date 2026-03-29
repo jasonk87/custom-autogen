@@ -1,5 +1,5 @@
 ﻿"""
-Custom Agent Studio v10 - Refactored
+Custom Agent Studio v11 - Refactored
 ====================================
 This is the main entry point for running the Custom Agent Studio.
 The application logic is split into modules in the `app/` directory.
@@ -40,7 +40,7 @@ def _shutdown(*_args):
 
 if __name__ == "__main__":
     log.info("starting_server", extra={"extra": {"host": "0.0.0.0", "port": 5000}})
-    print("Starting Custom Agent Studio - v10 (Refactored) - http://127.0.0.1:5000")
+    print("Starting Custom Agent Studio - v11 (Refactored) - http://127.0.0.1:5000")
 
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)

@@ -67,6 +67,11 @@ def tree_listing(root: str) -> Dict[str, Any]:
 def execute_python(code: str) -> str:
     """
     Executes a string of Python code in a temporary file and returns the output.
+    This is useful for quickly testing small snippets of code.
+    To write full programs, use write_file and execute_shell_command.
+
+    Args:
+        code: The Python code to execute.
     """
     fp = os.path.join(WORKSPACE_DIR, f"tmp_{binascii.b2a_hex(os.urandom(4)).decode()}.py")
     try:
