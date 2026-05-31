@@ -4,8 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Custom Agent Studio - v11</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=12" />
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link rel="stylesheet" href="/static/css/style.css?v=14" />
 </head>
 <body>
   <div class="app">
@@ -81,6 +80,31 @@
                 <span>Allow Tools</span>
               </label>
             </div>
+          </div>
+          <div class="group" style="margin-top:12px;">
+            <label>Human Proxy</label>
+            <div id="human-proxy-options" class="proxy-options">
+              <label class="proxy-option">
+                <input type="radio" name="human-proxy-mode" value="off" />
+                <span><strong>Off</strong><small>Agents work without a human representative.</small></span>
+              </label>
+              <label class="proxy-option">
+                <input type="radio" name="human-proxy-mode" value="consult" checked />
+                <span><strong>Consult me</strong><small>Pause and ask you when human input is needed.</small></span>
+              </label>
+              <label class="proxy-option">
+                <input type="radio" name="human-proxy-mode" value="delegate_safe" />
+                <span><strong>Delegate routine</strong><small>Handle routine decisions and reversible workspace edits.</small></span>
+              </label>
+              <label class="proxy-option">
+                <input type="radio" name="human-proxy-mode" value="autonomous_workspace" />
+                <span><strong>Workspace autonomy</strong><small>Act independently inside the workspace, including deletion.</small></span>
+              </label>
+            </div>
+          </div>
+          <div id="human-proxy-preferences-group" class="group">
+            <label for="human-proxy-preferences">Delegation Notes</label>
+            <textarea id="human-proxy-preferences" class="compact-textarea" placeholder="Preferences, priorities, and decisions the proxy should make on your behalf..."></textarea>
           </div>
         </details>
 
@@ -190,7 +214,15 @@
         <div style="width:44px;"></div>
       </header>
 
-      <div id="chat"></div>
+      <div id="chat">
+        <div class="chat-empty">
+          <div class="chat-empty-icon" aria-hidden="true">+</div>
+          <div class="chat-empty-kicker">Multi-agent workspace</div>
+          <h2>Build a team for your next task</h2>
+          <p>Describe a scenario, generate specialized agents, and guide their work from one place.</p>
+          <button id="empty-open-setup" class="btn btn-primary" type="button">Open setup</button>
+        </div>
+      </div>
 
       <div id="thinkdock" style="display:none;">
         <div id="thinkhdr">
@@ -205,12 +237,16 @@
       </div>
 
       <div class="footer">
-        <div id="status">Status: Idle</div>
+        <div class="status-row">
+          <div id="status">Status: Idle</div>
+          <button id="stop-run" class="btn btn-danger hidden" type="button">Stop simulation</button>
+        </div>
         <form id="fbform">
           <input id="fb" placeholder="Type message..." disabled autocomplete="off" />
           <button id="send" class="btn btn-primary" disabled>Send</button>
         </form>
       </div>
+      <button id="jump-latest" class="btn btn-primary hidden" type="button">Latest messages</button>
     </main>
   </div>
 
@@ -242,6 +278,6 @@
     </div>
   </div>
 
-  <script src="/static/js/main.js?v=12"></script>
+  <script src="/static/js/main.js?v=16"></script>
 </body>
 </html>

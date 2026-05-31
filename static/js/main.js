@@ -9,6 +9,126 @@ let currentStatus = 'idle';
 const think = { active: false, buffer: '', open: false, minimized: false };
 const playgroundState = { toolNames: [] };
 const SESSION_KEY = 'agentStudioSession';
+const MODEL_DEFAULT_VERSION_KEY = 'agentStudioModelDefaultVersion';
+const MODEL_DEFAULT_VERSION = 'gemini-2.5-flash-lite-max-thinking-v1';
+const PREFERRED_MODEL = 'gemini::cloud::gemini-2.5-flash-lite';
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function inlineMarkdown(value) {
+  return escapeHtml(value)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+}
+
+function renderMarkdown(value) {
+  const lines = String(value ?? '').replace(/\r\n?/g, '\n').split('\n');
+  const blocks = [];
+  let paragraph = [];
+  let listType = null;
+  let listItems = [];
+  let codeLines = null;
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    blocks.push(`<p>${paragraph.map(inlineMarkdown).join('<br>')}</p>`);
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (!listItems.length) return;
+    blocks.push(`<${listType}>${listItems.map(item => `<li>${inlineMarkdown(item)}</li>`).join('')}</${listType}>`);
+    listType = null;
+    listItems = [];
+  };
+
+  lines.forEach(line => {
+    if (line.trim().startsWith('```')) {
+      flushParagraph();
+      flushList();
+      if (codeLines === null) {
+        codeLines = [];
+      } else {
+        blocks.push(`<pre><code>${escapeHtml(codeLines.join('\n'))}</code></pre>`);
+        codeLines = null;
+      }
+      return;
+    }
+    if (codeLines !== null) {
+      codeLines.push(line);
+      return;
+    }
+
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    const unordered = line.match(/^\s*[-*]\s+(.+)$/);
+    const ordered = line.match(/^\s*\d+\.\s+(.+)$/);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      const level = heading[1].length + 2;
+      blocks.push(`<h${level}>${inlineMarkdown(heading[2])}</h${level}>`);
+    } else if (unordered || ordered) {
+      flushParagraph();
+      const nextType = unordered ? 'ul' : 'ol';
+      if (listType && listType !== nextType) flushList();
+      listType = nextType;
+      listItems.push((unordered || ordered)[1]);
+    } else if (!line.trim()) {
+      flushParagraph();
+      flushList();
+    } else {
+      flushList();
+      paragraph.push(line);
+    }
+  });
+  if (codeLines !== null) blocks.push(`<pre><code>${escapeHtml(codeLines.join('\n'))}</code></pre>`);
+  flushParagraph();
+  flushList();
+  return blocks.join('');
+}
+
+function shouldFollowChat(chat) {
+  return chat.scrollHeight - chat.scrollTop - chat.clientHeight < 96;
+}
+
+function scrollChatToLatest(chat) {
+  chat.scrollTop = chat.scrollHeight;
+  $('#jump-latest')?.classList.add('hidden');
+}
+
+function revealLatestButton() {
+  $('#jump-latest')?.classList.remove('hidden');
+}
+
+function workspaceUrl(path) {
+  return String(path ?? '')
+    .replaceAll('\\', '/')
+    .split('/')
+    .map(encodeURIComponent)
+    .join('/');
+}
+
+function humanProxyMode() {
+  return $('input[name="human-proxy-mode"]:checked')?.value || 'consult';
+}
+
+function setHumanProxyMode(mode) {
+  const input = $(`input[name="human-proxy-mode"][value="${mode || 'consult'}"]`);
+  if (input) input.checked = true;
+  updateHumanProxyPreferencesVisibility();
+}
+
+function updateHumanProxyPreferencesVisibility() {
+  const group = $('#human-proxy-preferences-group');
+  if (!group) return;
+  group.classList.toggle('hidden', !['delegate_safe', 'autonomous_workspace'].includes(humanProxyMode()));
+}
 
 function toast(msg) {
   const t = document.createElement('div');
@@ -23,10 +143,13 @@ function toast(msg) {
     'padding:12px 16px',
     'border-radius:10px',
     'z-index:10000',
-    'font-size:13px'
+    'font-size:13px',
+    'line-height:1.5',
+    'max-width:min(420px, calc(100vw - 32px))',
+    'box-shadow:0 12px 30px rgba(0,0,0,0.35)'
   ].join(';');
   document.body.appendChild(t);
-  setTimeout(() => t.remove(), 2200);
+  setTimeout(() => t.remove(), msg.length > 72 ? 8000 : 2200);
 }
 
 function setStatus(state) {
@@ -58,6 +181,7 @@ function setStatus(state) {
 function addMsg(sender, text, mine = false, id = null, target = '#chat') {
   const chat = $(target);
   if (!chat) return;
+  const follow = shouldFollowChat(chat);
 
   window.__transcript = (window.__transcript || []).concat([{ t: Date.now(), from: sender, text }]);
 
@@ -68,14 +192,15 @@ function addMsg(sender, text, mine = false, id = null, target = '#chat') {
   who.textContent = mine ? 'YOU' : sender;
 
   const body = document.createElement('div');
-  if (window.marked && text) body.innerHTML = window.marked.parse(text);
-  else body.textContent = text || '';
+  body.className = 'message-body';
+  body.innerHTML = renderMarkdown(text);
 
   box.append(who, body);
   chat.append(box);
-  chat.scrollTop = chat.scrollHeight;
+  if (follow) scrollChatToLatest(chat);
+  else if (target === '#chat') revealLatestButton();
 
-  if (id) streams[id] = { el: body, thinkPhase: false };
+  if (id) streams[id] = { el: body, thinkPhase: false, rawText: text || '' };
 }
 
 function ensureThinkHandling(id, chunk) {
@@ -111,10 +236,14 @@ function appendToken(id, delta) {
   ensureThinkHandling(id, delta);
   if (!streams[id]) addMsg('assistant', '', false, id);
   const stream = streams[id];
+  const chat = $('#chat');
+  const follow = shouldFollowChat(chat);
   if (!stream.thinkPhase) {
-    stream.el.innerHTML += (delta || '').replaceAll('\n', '<br>');
+    stream.rawText += delta || '';
+    stream.el.innerHTML = renderMarkdown(stream.rawText);
   }
-  $('#chat').scrollTop = $('#chat').scrollHeight;
+  if (follow) scrollChatToLatest(chat);
+  else revealLatestButton();
 }
 
 function openThinkDock() {
@@ -165,17 +294,17 @@ function renderTeam() {
   container.innerHTML = agents.map((a, i) => `
     <div class='team-item'>
       <div class='team-item-header'>
-        <input data-i='${i}' class='name' value='${a.name || ''}' placeholder='Name' />
+        <input data-i='${i}' class='name' value='${escapeHtml(a.name)}' placeholder='Name' />
         <div class='team-item-actions'>
           <button data-i='${i}' class='btn btn-neutral up' title='Move Up'>^</button>
           <button data-i='${i}' class='btn btn-neutral down' title='Move Down'>v</button>
           <button data-i='${i}' class='btn btn-danger rm' title='Remove'>x</button>
         </div>
       </div>
-      <textarea data-i='${i}' class='sys' placeholder='System Message'>${a.system || ''}</textarea>
+      <textarea data-i='${i}' class='sys' placeholder='System Message'>${escapeHtml(a.system)}</textarea>
       <div class='team-item-footer'>
         <label>Temp</label>
-        <input data-i='${i}' class='num' type='number' min='0' max='2' step='0.1' value='${a.temperature ?? 0.3}' />
+        <input data-i='${i}' class='num' type='number' min='0' max='2' step='0.1' value='${escapeHtml(a.temperature ?? 0.3)}' />
       </div>
     </div>
   `).join('');
@@ -222,18 +351,21 @@ function buttons(running) {
 
   if (running) {
     actions.innerHTML = "<button id='stop' class='btn btn-danger' style='width:100%'>Stop Task</button>";
-    $('#stop').onclick = async () => {
-      if (es) es.close();
-      await fetch('/stop', { method: 'POST' });
-      runActive = false;
-      setStatus('idle');
-      buttons(false);
-      closeThinkDock();
-    };
+    $('#stop').onclick = stopSimulation;
   } else {
     actions.innerHTML = "<button id='start' class='btn btn-primary' style='width:100%'>Start Task</button>";
     $('#start').onclick = startRun;
   }
+  $('#stop-run')?.classList.toggle('hidden', !running);
+}
+
+async function stopSimulation() {
+  if (es) es.close();
+  await fetch('/stop', { method: 'POST' });
+  runActive = false;
+  setStatus('idle');
+  buttons(false);
+  closeThinkDock();
 }
 
 async function startRun() {
@@ -254,7 +386,9 @@ async function startRun() {
     manager_mode: $('#mode').value,
     turns: $('#turns').value,
     temperature: $('#temperature').value,
-    allow_tools: $('#allow-tools').checked
+    allow_tools: $('#allow-tools').checked,
+    human_proxy_mode: humanProxyMode(),
+    human_proxy_preferences: $('#human-proxy-preferences').value
   });
 
   es = new EventSource(`/stream?${params.toString()}`);
@@ -312,7 +446,9 @@ function saveSession() {
       mode: $('#mode').value,
       turns: $('#turns').value,
       temperature: $('#temperature').value,
-      allow_tools: $('#allow-tools').checked
+      allow_tools: $('#allow-tools').checked,
+      human_proxy_mode: humanProxyMode(),
+      human_proxy_preferences: $('#human-proxy-preferences').value
     }
   };
   localStorage.setItem(SESSION_KEY, JSON.stringify(s));
@@ -329,6 +465,8 @@ function loadSession() {
     if (s.settings.turns) $('#turns').value = s.settings.turns;
     if (s.settings.temperature) $('#temperature').value = s.settings.temperature;
     if (s.settings.allow_tools !== undefined) $('#allow-tools').checked = s.settings.allow_tools;
+    setHumanProxyMode(s.settings.human_proxy_mode);
+    if (s.settings.human_proxy_preferences !== undefined) $('#human-proxy-preferences').value = s.settings.human_proxy_preferences;
   }
 }
 
@@ -349,6 +487,8 @@ function applySavedSettings() {
   if (settings.turns) $('#turns').value = settings.turns;
   if (settings.temperature) $('#temperature').value = settings.temperature;
   if (settings.allow_tools !== undefined) $('#allow-tools').checked = settings.allow_tools;
+  setHumanProxyMode(settings.human_proxy_mode);
+  if (settings.human_proxy_preferences !== undefined) $('#human-proxy-preferences').value = settings.human_proxy_preferences;
 }
 
 function clearDraftKeepSettings() {
@@ -370,7 +510,7 @@ async function loadModels() {
   let html = '';
   for (const [groupName, groupModels] of Object.entries(groups)) {
     if (groupModels.length > 0) {
-      html += `<optgroup label="${groupName}">` + groupModels.map(m => `<option value="${m.value}">${m.label}</option>`).join('') + `</optgroup>`;
+      html += `<optgroup label="${escapeHtml(groupName)}">` + groupModels.map(m => `<option value="${escapeHtml(m.value)}">${escapeHtml(m.label)}</option>`).join('') + `</optgroup>`;
     }
   }
 
@@ -380,10 +520,13 @@ async function loadModels() {
 
   const savedSettings = getSavedSettings();
   const values = models.map(m => m.value);
-  if (savedSettings.model && values.includes(savedSettings.model)) {
+  if (localStorage.getItem(MODEL_DEFAULT_VERSION_KEY) !== MODEL_DEFAULT_VERSION && values.includes(PREFERRED_MODEL)) {
+    sel.value = PREFERRED_MODEL;
+    localStorage.setItem(MODEL_DEFAULT_VERSION_KEY, MODEL_DEFAULT_VERSION);
+  } else if (savedSettings.model && values.includes(savedSettings.model)) {
     sel.value = savedSettings.model;
-  } else if (values.find(v => v.includes('gemini-2.0-flash'))) {
-    sel.value = values.find(v => v.includes('gemini-2.0-flash'));
+  } else if (values.find(v => v.includes('gemini-2.5-flash-lite'))) {
+    sel.value = values.find(v => v.includes('gemini-2.5-flash-lite'));
   } else if (values.length > 0) {
     sel.value = values[0];
   }
@@ -414,11 +557,11 @@ const ICONS = {
 function renderTreeNode(n) {
   const icon = n.type === 'file' ? ICONS.file : ICONS.folder;
   const name = n.type === 'file'
-    ? `<a href='/workspace/${n.path}' target='_blank' class='node-name'>${n.name}</a>`
-    : `<span class='node-name'>${n.name}</span>`;
+    ? `<a href='/workspace/${workspaceUrl(n.path)}' target='_blank' class='node-name'>${escapeHtml(n.name)}</a>`
+    : `<span class='node-name'>${escapeHtml(n.name)}</span>`;
   const actions = `<div class='node-actions'>
-    <button class='rename-node' data-path='${n.path}' title='Rename'>${ICONS.edit}</button>
-    <button class='delete-node' data-path='${n.path}' title='Delete'>${ICONS.delete}</button>
+    <button class='rename-node' data-path='${escapeHtml(n.path)}' title='Rename'>${ICONS.edit}</button>
+    <button class='delete-node' data-path='${escapeHtml(n.path)}' title='Delete'>${ICONS.delete}</button>
   </div>`;
   const children = n.children ? `<ul>${n.children.map(renderTreeNode).join('')}</ul>` : '';
   return `<li><div class='node'>${icon}${name}${actions}</div>${children}</li>`;
@@ -491,7 +634,9 @@ async function saveCurrentSessionToServer() {
       mode: $('#mode').value,
       turns: $('#turns').value,
       temperature: $('#temperature').value,
-      allow_tools: $('#allow-tools').checked
+      allow_tools: $('#allow-tools').checked,
+      human_proxy_mode: humanProxyMode(),
+      human_proxy_preferences: $('#human-proxy-preferences').value
     }
   };
 
@@ -516,10 +661,10 @@ async function openSessionsModal() {
   const sessions = await r.json();
   $('#sessions-list').innerHTML = sessions.map(s => `
     <div style='padding:10px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between;'>
-      <span>${s}</span>
+      <span>${escapeHtml(s)}</span>
       <div>
-        <button class='btn btn-neutral session-load' data-file='${s}'>Load</button>
-        <button class='btn btn-danger session-delete' data-file='${s}'>x</button>
+        <button class='btn btn-neutral session-load' data-file='${escapeHtml(s)}'>Load</button>
+        <button class='btn btn-danger session-delete' data-file='${escapeHtml(s)}'>x</button>
       </div>
     </div>
   `).join('');
@@ -533,8 +678,8 @@ async function loadToolsForPlayground() {
   if (!container) return;
   container.innerHTML = tools.map(t => `
     <label class='playground-tool-checkbox' style='display:flex; gap:6px; align-items:center; font-size:12px;'>
-      <input type='checkbox' value='${t.name}' />
-      <span>${t.name}</span>
+      <input type='checkbox' value='${escapeHtml(t.name)}' />
+      <span>${escapeHtml(t.name)}</span>
     </label>
   `).join('');
 }
@@ -582,11 +727,14 @@ function bindTabs() {
     side.classList.remove('open');
     overlay.classList.remove('open');
   };
-
-  $('#sidebar-toggle').onclick = () => {
+  const openSidebar = () => {
     side.classList.add('open');
     overlay.classList.add('open');
   };
+
+  $('#sidebar-toggle').onclick = openSidebar;
+  const emptyOpenSetup = $('#empty-open-setup');
+  if (emptyOpenSetup) emptyOpenSetup.onclick = openSidebar;
   overlay.onclick = closeSidebar;
   $('#sidebar-close-mobile').onclick = closeSidebar;
 
@@ -663,11 +811,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         body: JSON.stringify({
           scenario,
           model: $('#model').value,
-          num_agents: $('#num-agents').value
+          num_agents: parseInt($('#num-agents').value, 10)
         })
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || 'Generation failed');
+      if (!r.ok) throw new Error(d.user_message || d.error || 'Generation failed');
 
       agents = d.agents || [];
       if (d.goal) $('#goal').value = d.goal;
@@ -716,6 +864,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (d.settings.turns) $('#turns').value = d.settings.turns;
         if (d.settings.temperature) $('#temperature').value = d.settings.temperature;
         if (d.settings.allow_tools !== undefined) $('#allow-tools').checked = d.settings.allow_tools;
+        setHumanProxyMode(d.settings.human_proxy_mode);
+        if (d.settings.human_proxy_preferences !== undefined) $('#human-proxy-preferences').value = d.settings.human_proxy_preferences;
       }
       renderTeam();
       saveSession();
@@ -812,12 +962,21 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   $('#thinkmin').onclick = toggleThinkMinimize;
   $('#thinkclose').onclick = closeThinkDock;
+  $('#stop-run').onclick = stopSimulation;
+  $('#jump-latest').onclick = () => scrollChatToLatest($('#chat'));
 
   $('#goal').addEventListener('change', saveSession);
   $('#mode').addEventListener('change', saveSession);
   $('#turns').addEventListener('change', saveSession);
   $('#temperature').addEventListener('change', saveSession);
   $('#model').addEventListener('change', saveSession);
+  $$('input[name="human-proxy-mode"]').forEach(input => {
+    input.addEventListener('change', () => {
+      updateHumanProxyPreferencesVisibility();
+      saveSession();
+    });
+  });
+  $('#human-proxy-preferences').addEventListener('change', saveSession);
 
   const saveOllamaBtn = $('#save-ollama-config');
   if (saveOllamaBtn) {
@@ -843,6 +1002,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadOllamaSettings();
   await loadModels();
   renderTeam();
+  updateHumanProxyPreferencesVisibility();
   setStatus('idle');
   buttons(false);
 });

@@ -9,7 +9,5 @@ exclude = [
   "jules-scratch",
   "scripts",
 ]
-
-[tool.ruff.lint]
 select = ["F"]
 ignore = ["F401"]
