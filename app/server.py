@@ -158,7 +158,7 @@ async def stream():
             log.info("stream_client_disconnected", extra={"run_id": state.current_run_id})
         except Exception as e:
             log.error("stream_error", extra={"run_id": state.current_run_id, "error": str(e)})
-            yield f"data: {json.dumps({'type': 'status', 'state': 'error', 'message': str(e)})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'state': 'error', 'user_message': 'Stream encountered an unexpected error.', 'message': str(e)})}\n\n"
 
     headers = {
         "Content-Type": "text/event-stream; charset=utf-8",

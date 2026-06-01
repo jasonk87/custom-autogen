@@ -503,8 +503,9 @@ async function startRun() {
     const d = JSON.parse(ev.data);
     if (d.type === 'status') {
       if (d.state === 'error') {
-        toast(`Error: ${d.user_message}`);
-        addMsg('System', `**Error:** ${d.user_message}`);
+        const errMsg = d.user_message || d.message || "Unknown error";
+        toast(`Error: ${errMsg}`);
+        addMsg('System', `**Error:** ${errMsg}`);
         es.close();
         runActive = false;
         setStatus('idle');
