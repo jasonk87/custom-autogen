@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import html
 import json
 import os
 import queue
@@ -26,7 +27,7 @@ from app.config import (
     gemini_model_info,
     require_gemini_api_key,
 )
-from app.core import run_orchestrator
+from app.core import TOOL_REFLECTION_GUIDANCE, run_orchestrator, OrchestratorError
 from app.scenario import generate_agents_from_scenario
 from app.state import state
 from app.tools import TOOLS
@@ -56,14 +57,14 @@ def _workspace_root() -> str:
 
 
 def _resolve_workspace_path(path: str) -> str:
-    base_path = os.path.abspath(_workspace_root())
-    target_path = os.path.abspath(os.path.join(base_path, path))
+    base_path = os.path.realpath(_workspace_root())
+    target_path = os.path.realpath(os.path.join(base_path, path))
     if os.path.commonpath([base_path, target_path]) != base_path:
         raise PermissionError("access_denied")
     return target_path
 
 
-def _run_orchestrator_thread(goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy, temperature, allow_tools):
+def _run_orchestrator_thread(goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy_mode, human_proxy_preferences, temperature, allow_tools):
     try:
         asyncio.run(
             run_orchestrator(
@@ -73,16 +74,22 @@ def _run_orchestrator_thread(goal, model, agents_cfg, manager_mode, out_q, max_t
                 manager_mode,
                 out_q,
                 max_turns,
-                human_proxy,
+                human_proxy_mode,
+                human_proxy_preferences,
                 temperature,
                 allow_tools,
             )
         )
+    except OrchestratorError as e:
+        log.error("orchestrator_thread_known_error", extra={"error_code": e.error_code, "user_message": e.user_message, "developer_message": e.developer_message}, exc_info=e)
+        out_q.put(json.dumps(e.to_payload()))
+        out_q.put("[DONE]")
     except (asyncio.CancelledError, KeyboardInterrupt):
         log.info("orchestrator_thread_cancelled")
         out_q.put("[DONE]")
     except BaseException as e:
-        log.error("orchestrator_thread_error", extra={"error": str(e), "type": type(e).__name__})
+        log.error("orchestrator_thread_unexpected_error", extra={"error": str(e), "type": type(e).__name__}, exc_info=e)
+        out_q.put(json.dumps(OrchestratorError("An unexpected error occurred in the orchestrator thread.", str(e)).to_payload()))
         out_q.put("[DONE]")
 
 
@@ -98,7 +105,9 @@ async def stream():
     agents_b64 = request.args.get("agents", "")
     manager_mode = request.args.get("manager_mode", "auto")
     max_turns = int(request.args.get("turns", "60"))
-    human_proxy = request.args.get("human_proxy", "false").lower() == "true"
+    legacy_human_proxy = request.args.get("human_proxy", "false").lower() == "true"
+    human_proxy_mode = request.args.get("human_proxy_mode", "consult" if legacy_human_proxy else "off")
+    human_proxy_preferences = request.args.get("human_proxy_preferences", "")
     temperature = float(request.args.get("temperature", "0.3"))
     allow_tools = request.args.get("allow_tools", "true").lower() == "true"
 
@@ -113,7 +122,7 @@ async def stream():
         agents_cfg = []
 
     out_q: "queue.Queue[str]" = queue.Queue()
-    thread_args = (goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy, temperature, allow_tools)
+    thread_args = (goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy_mode, human_proxy_preferences, temperature, allow_tools)
     state.start(_run_orchestrator_thread, thread_args)
 
     async def gen():
@@ -121,10 +130,11 @@ async def stream():
         log.info(
             "stream_started",
             extra={
+                "run_id": state.current_run_id,
                 "model": model,
                 "goal_len": len(goal),
                 "manager_mode": manager_mode,
-                "human_proxy": human_proxy,
+                "human_proxy_mode": human_proxy_mode,
             },
         )
         try:
@@ -134,7 +144,7 @@ async def stream():
                     yield f"data: {item}\n\n"
                     last_ping = time.time()
                     if item == "[DONE]":
-                        log.info("stream_finished_cleanly")
+                        log.info("stream_finished_cleanly", extra={"run_id": state.current_run_id})
                         break
                 except queue.Empty:
                     now = time.time()
@@ -142,12 +152,12 @@ async def stream():
                         yield ": ping\n\n"
                         last_ping = now
                 except Exception as e:
-                    log.error("generator_loop_error", extra={"error": str(e)})
+                    log.error("generator_loop_error", extra={"run_id": state.current_run_id, "error": str(e)})
                     break
         except GeneratorExit:
-            log.info("stream_client_disconnected")
+            log.info("stream_client_disconnected", extra={"run_id": state.current_run_id})
         except Exception as e:
-            log.error("stream_error", extra={"error": str(e)})
+            log.error("stream_error", extra={"run_id": state.current_run_id, "error": str(e)})
             yield f"data: {json.dumps({'type': 'status', 'state': 'error', 'message': str(e)})}\n\n"
 
     headers = {
@@ -171,8 +181,8 @@ async def user_input():
     msg = (data or {}).get("message")
     try:
         state.user_input_q.put_nowait(msg)
-    except Exception:
-        pass
+    except Exception as e:
+        log.error("user_input_queue_error", extra={"error": str(e), "type": type(e).__name__})
     return jsonify({"ok": True})
 
 
@@ -184,8 +194,8 @@ async def coach_input():
         return jsonify({"error": "missing_message"}), 400
     try:
         state.coach_input_q.put_nowait(msg.strip())
-    except Exception:
-        pass
+    except Exception as e:
+        log.error("coach_input_queue_error", extra={"error": str(e), "type": type(e).__name__})
     return jsonify({"ok": True})
 
 
@@ -195,8 +205,8 @@ async def choose_next():
     name = (data or {}).get("name")
     try:
         state.manual_next_q.put_nowait(name)
-    except Exception:
-        pass
+    except Exception as e:
+        log.error("choose_next_queue_error", extra={"error": str(e), "type": type(e).__name__})
     return jsonify({"ok": True})
 
 
@@ -205,16 +215,41 @@ async def scenario_generate():
     data = await request.get_json()
     scenario = (data or {}).get("scenario")
     model = (data or {}).get("model")
-    num_agents = int((data or {}).get("num_agents", 3))
-    if not scenario:
-        return jsonify({"error": "missing_scenario"}), 400
+    num_agents = (data or {}).get("num_agents", 3)
+
+    if not scenario or not isinstance(scenario, str):
+        return jsonify(OrchestratorError("Missing or invalid 'scenario' in request.", "Scenario is missing or not a string.", "invalid_scenario_input").to_payload()), 400
+    if not model or not isinstance(model, str):
+        return jsonify(OrchestratorError("Missing or invalid 'model' in request.", "Model is missing or not a string.", "invalid_model_input").to_payload()), 400
+    if not isinstance(num_agents, int) or num_agents <= 0:
+        return jsonify(OrchestratorError("Invalid 'num_agents' in request.", "num_agents must be a positive integer.", "invalid_num_agents_input").to_payload()), 400
 
     try:
         agents, suggested_goal = await generate_agents_from_scenario(scenario, model, num_agents)
         return jsonify({"agents": agents, "goal": suggested_goal})
+    except OrchestratorError as e:
+        log.error("failed_to_generate_agents_known_error", extra={"error_code": e.error_code, "user_message": e.user_message, "developer_message": e.developer_message}, exc_info=e)
+        return jsonify(e.to_payload()), 500
     except Exception as e:
-        log.error("failed_to_generate_agents", exc_info=e)
-        return jsonify({"error": str(e)}), 500
+        log.error("failed_to_generate_agents_unexpected_error", exc_info=e)
+        error_message = str(e)
+        if "API key expired" in error_message:
+            return jsonify(
+                OrchestratorError(
+                    "Your Gemini API key has expired. Replace GEMINI_API_KEY in .env and restart the server.",
+                    error_message,
+                    "gemini_api_key_expired",
+                ).to_payload()
+            ), 500
+        if "API_KEY_INVALID" in error_message:
+            return jsonify(
+                OrchestratorError(
+                    "Your Gemini API key is invalid. Replace GEMINI_API_KEY in .env and restart the server.",
+                    error_message,
+                    "gemini_api_key_invalid",
+                ).to_payload()
+            ), 500
+        return jsonify(OrchestratorError("Failed to generate agents due to an unexpected error.", error_message).to_payload()), 500
 
 
 @app.route("/api/settings/ollama", methods=["GET", "POST"])
@@ -261,8 +296,12 @@ async def api_agent_run():
     message = (data or {}).get("message")
     model = (data or {}).get("model", DEFAULT_MODEL)
 
-    if not agent_config or not message:
-        return jsonify({"error": "missing_agent_or_message"}), 400
+    if not agent_config or not isinstance(agent_config, dict):
+        return jsonify(OrchestratorError("Missing or invalid 'agent' configuration.", "Agent configuration is missing or not a dictionary.", "invalid_agent_config_input").to_payload()), 400
+    if not message or not isinstance(message, str):
+        return jsonify(OrchestratorError("Missing or invalid 'message' for agent run.", "Message is missing or not a string.", "invalid_message_input").to_payload()), 400
+    if not model or not isinstance(model, str):
+        return jsonify(OrchestratorError("Missing or invalid 'model' for agent run.", "Model is missing or not a string.", "invalid_model_input").to_payload()), 400
 
     if app.testing:
         return jsonify({"reply": f"Test reply: {message}"})
@@ -276,9 +315,10 @@ async def api_agent_run():
         agent = AssistantAgent(
             name=agent_config.get("name", "playground_agent"),
             model_client=model_client,
-            system_message=agent_config.get("system_message", "You are a helpful assistant."),
+            system_message=agent_config.get("system_message", "You are a helpful assistant.") + TOOL_REFLECTION_GUIDANCE,
             model_client_stream=False,
             tools=selected_tools,
+            reflect_on_tool_use=True,
         )
 
         result = await agent.run(task=message, cancellation_token=CancellationToken())
@@ -292,9 +332,12 @@ async def api_agent_run():
                     break
 
         return jsonify({"reply": reply})
+    except OrchestratorError as e:
+        log.error("agent_run_known_error", extra={"error_code": e.error_code, "user_message": e.user_message, "developer_message": e.developer_message}, exc_info=e)
+        return jsonify(e.to_payload()), 500
     except Exception as e:
-        log.error("agent_run_error", extra={"error": str(e)})
-        return jsonify({"error": "agent_run_failed", "message": str(e)}), 500
+        log.error("agent_run_unexpected_error", extra={"error": str(e)}, exc_info=e)
+        return jsonify(OrchestratorError("Failed to run agent due to an unexpected error.", str(e)).to_payload()), 500
 
 
 @app.get("/api/workspace/files")
@@ -318,22 +361,32 @@ async def api_upload():
     files = await request.files
     f = files.get("file")
     if not f:
-        return jsonify({"error": "missing file"}), 400
+        return jsonify(OrchestratorError("No file provided for upload.", "File object is missing from request.", "missing_file").to_payload()), 400
 
     blob = f.read()
     size = len(blob)
     if size > MAX_UPLOAD_BYTES:
-        return jsonify({"error": "too_large", "max": MAX_UPLOAD_BYTES}), 413
+        return jsonify(OrchestratorError(f"File too large. Maximum allowed is {MAX_UPLOAD_BYTES} bytes.", f"Uploaded file size {size} exceeds max {MAX_UPLOAD_BYTES}.", "too_large").to_payload()), 413
 
     mime = f.mimetype or "application/octet-stream"
     if mime not in ALLOWED_UPLOAD_MIMES and not secure_filename(f.filename).endswith((".txt", ".md", ".json", ".py")):
-        return jsonify({"error": "mime_blocked", "mime": mime}), 415
+        return jsonify(OrchestratorError(f"File type '{mime}' is not allowed.", f"MIME type {mime} is not in ALLOWED_UPLOAD_MIMES and filename extension is not allowed.", "mime_blocked").to_payload()), 415
 
     fn = secure_filename(f.filename)
-    fp = _resolve_workspace_path(fn)
-    os.makedirs(os.path.dirname(fp), exist_ok=True)
-    with open(fp, "wb") as dest:
-        dest.write(blob)
+    if not fn:
+        return jsonify(OrchestratorError("Uploaded file must have a valid filename.", "Filename is empty after sanitization.", "invalid_filename").to_payload()), 400
+    try:
+        fp = _resolve_workspace_path(fn)
+    except PermissionError:
+        return jsonify(OrchestratorError("Access denied to workspace path.", f"Attempted to resolve path {fn} outside of workspace root.", "access_denied").to_payload()), 403
+
+    try:
+        os.makedirs(os.path.dirname(fp), exist_ok=True)
+        with open(fp, "wb") as dest:
+            dest.write(blob)
+    except OSError as e:
+        log.error("file_upload_os_error", extra={"upload_name": fn, "error": str(e)}, exc_info=e)
+        return jsonify(OrchestratorError("Failed to save file due to a server error.", str(e), "file_save_error").to_payload()), 500
 
     return jsonify({"ok": True, "file": fn, "bytes": size})
 
@@ -344,7 +397,7 @@ async def ws_file(fn: str):
     try:
         _resolve_workspace_path(fn)
     except PermissionError:
-        return jsonify({"error": "access_denied"}), 403
+        return jsonify(OrchestratorError("Access denied to workspace path.", f"Attempted to access path {fn} outside of workspace root.", "access_denied").to_payload()), 403
     return await send_from_directory(root, fn)
 
 
@@ -353,12 +406,14 @@ async def api_delete_file():
     data = await request.get_json()
     path = (data or {}).get("path")
     if not path:
-        return jsonify({"error": "missing_path"}), 400
+        return jsonify(OrchestratorError("Missing 'path' for file deletion.", "Path is missing from request.", "missing_path").to_payload()), 400
 
     try:
         target_path = _resolve_workspace_path(path)
     except PermissionError:
-        return jsonify({"error": "access_denied"}), 403
+        return jsonify(OrchestratorError("Access denied to workspace path.", f"Attempted to delete path {path} outside of workspace root.", "access_denied").to_payload()), 403
+    if target_path == os.path.realpath(_workspace_root()):
+        return jsonify(OrchestratorError("Refusing to delete the workspace root.", f"Attempted to delete workspace root {target_path}.", "workspace_root_delete_blocked").to_payload()), 400
 
     try:
         if os.path.isdir(target_path):
@@ -367,9 +422,10 @@ async def api_delete_file():
             os.remove(target_path)
         return jsonify({"ok": True})
     except FileNotFoundError:
-        return jsonify({"error": "not_found"}), 404
+        return jsonify(OrchestratorError(f"File or directory at '{path}' not found.", f"Path {target_path} not found.", "not_found").to_payload()), 404
     except OSError as e:
-        return jsonify({"error": "os_error", "message": str(e)}), 500
+        log.error("file_delete_os_error", extra={"path": path, "error": str(e)}, exc_info=e)
+        return jsonify(OrchestratorError("Failed to delete file or directory due to a server error.", str(e), "file_delete_error").to_payload()), 500
 
 
 @app.post("/api/workspace/set_directory")
@@ -377,13 +433,13 @@ async def api_set_directory():
     data = await request.get_json()
     path = (data or {}).get("path")
     if not path:
-        return jsonify({"error": "missing_path"}), 400
+        return jsonify(OrchestratorError("Missing 'path' for setting workspace directory.", "Path is missing from request.", "missing_path").to_payload()), 400
 
     target_path = os.path.abspath(path)
     if not os.path.exists(target_path):
-        return jsonify({"error": "not_found", "message": "Path does not exist"}), 404
+        return jsonify(OrchestratorError(f"Path '{path}' does not exist.", f"Path {target_path} does not exist.", "not_found").to_payload()), 404
     if not os.path.isdir(target_path):
-        return jsonify({"error": "not_a_directory", "message": "Path is not a directory"}), 400
+        return jsonify(OrchestratorError(f"Path '{path}' is not a directory.", f"Path {target_path} is not a directory.", "not_a_directory").to_payload()), 400
 
     state.active_workspace = target_path
     return jsonify({"ok": True, "workspace": target_path})
@@ -394,18 +450,19 @@ async def api_new_folder():
     data = await request.get_json()
     path = (data or {}).get("path")
     if not path:
-        return jsonify({"error": "missing_path"}), 400
+        return jsonify(OrchestratorError("Missing 'path' for new folder creation.", "Path is missing from request.", "missing_path").to_payload()), 400
 
     try:
         target_path = _resolve_workspace_path(path)
     except PermissionError:
-        return jsonify({"error": "access_denied"}), 403
+        return jsonify(OrchestratorError("Access denied to workspace path.", f"Attempted to create folder at {path} outside of workspace root.", "access_denied").to_payload()), 403
 
     try:
         os.makedirs(target_path, exist_ok=True)
         return jsonify({"ok": True})
     except OSError as e:
-        return jsonify({"error": "os_error", "message": str(e)}), 500
+        log.error("new_folder_os_error", extra={"path": path, "error": str(e)}, exc_info=e)
+        return jsonify(OrchestratorError("Failed to create folder due to a server error.", str(e), "folder_creation_error").to_payload()), 500
 
 
 @app.post("/api/workspace/file")
@@ -413,13 +470,15 @@ async def api_save_file():
     data = await request.get_json()
     path = (data or {}).get("path")
     content = (data or {}).get("content")
-    if path is None or content is None:
-        return jsonify({"error": "missing_path_or_content"}), 400
+    if path is None or not isinstance(path, str) or not path.strip():
+        return jsonify(OrchestratorError("Missing or invalid 'path' for file save.", "Path is missing or not a string.", "missing_path").to_payload()), 400
+    if content is None or not isinstance(content, str):
+        return jsonify(OrchestratorError("Missing or invalid 'content' for file save.", "Content is missing or not a string.", "missing_content").to_payload()), 400
 
     try:
         target_path = _resolve_workspace_path(path)
     except PermissionError:
-        return jsonify({"error": "access_denied"}), 403
+        return jsonify(OrchestratorError("Access denied to workspace path.", f"Attempted to save file at {path} outside of workspace root.", "access_denied").to_payload()), 403
 
     try:
         os.makedirs(os.path.dirname(target_path), exist_ok=True)
@@ -427,28 +486,30 @@ async def api_save_file():
             f.write(content)
         return jsonify({"ok": True})
     except Exception as e:
-        return jsonify({"error": "write_error", "message": str(e)}), 500
+        log.error("file_save_error", extra={"path": path, "error": str(e)}, exc_info=e)
+        return jsonify(OrchestratorError("Failed to save file due to a server error.", str(e), "file_save_error").to_payload()), 500
 
 
 @app.get("/api/workspace/file")
 async def api_get_file():
     path = request.args.get("path")
-    if not path:
-        return jsonify({"error": "missing_path"}), 400
+    if not path or not isinstance(path, str) or not path.strip():
+        return jsonify(OrchestratorError("Missing or invalid 'path' for file retrieval.", "Path is missing or not a string.", "missing_path").to_payload()), 400
 
     try:
         target_path = _resolve_workspace_path(path)
     except PermissionError:
-        return jsonify({"error": "access_denied"}), 403
+        return jsonify(OrchestratorError("Access denied to workspace path.", f"Attempted to read file at {path} outside of workspace root.", "access_denied").to_payload()), 403
 
     try:
         with open(target_path, "r", encoding="utf-8") as f:
             content = f.read()
         return Response(content, mimetype="text/plain")
     except FileNotFoundError:
-        return jsonify({"error": "not_found"}), 404
+        return jsonify(OrchestratorError(f"File at '{path}' not found.", f"Path {target_path} not found.", "not_found").to_payload()), 404
     except Exception as e:
-        return jsonify({"error": "read_error", "message": str(e)}), 500
+        log.error("file_read_error", extra={"path": path, "error": str(e)}, exc_info=e)
+        return jsonify(OrchestratorError("Failed to read file due to a server error.", str(e), "file_read_error").to_payload()), 500
 
 
 @app.post("/api/workspace/rename")
@@ -456,23 +517,26 @@ async def api_rename_file():
     data = await request.get_json()
     old_path = (data or {}).get("old_path")
     new_path = (data or {}).get("new_path")
-    if not old_path or not new_path:
-        return jsonify({"error": "missing_path"}), 400
+    if not old_path or not isinstance(old_path, str) or not old_path.strip():
+        return jsonify(OrchestratorError("Missing or invalid 'old_path' for file rename.", "old_path is missing or not a string.", "missing_old_path").to_payload()), 400
+    if not new_path or not isinstance(new_path, str) or not new_path.strip():
+        return jsonify(OrchestratorError("Missing or invalid 'new_path' for file rename.", "new_path is missing or not a string.", "missing_new_path").to_payload()), 400
 
     try:
         old_target_path = _resolve_workspace_path(old_path)
         new_target_path = _resolve_workspace_path(new_path)
     except PermissionError:
-        return jsonify({"error": "access_denied"}), 403
+        return jsonify(OrchestratorError("Access denied to workspace path.", f"Attempted to rename file from {old_path} to {new_path} outside of workspace root.", "access_denied").to_payload()), 403
 
     try:
         os.makedirs(os.path.dirname(new_target_path), exist_ok=True)
         os.rename(old_target_path, new_target_path)
         return jsonify({"ok": True})
     except FileNotFoundError:
-        return jsonify({"error": "not_found"}), 404
+        return jsonify(OrchestratorError(f"File or directory at '{old_path}' not found.", f"Path {old_target_path} not found.", "not_found").to_payload()), 404
     except OSError as e:
-        return jsonify({"error": "os_error", "message": str(e)}), 500
+        log.error("file_rename_os_error", extra={"old_path": old_path, "new_path": new_path, "error": str(e)}, exc_info=e)
+        return jsonify(OrchestratorError("Failed to rename file or directory due to a server error.", str(e), "file_rename_error").to_payload()), 500
 
 
 @app.post("/api/sessions/activate")
@@ -481,33 +545,49 @@ async def sessions_activate():
     raw_name = (data or {}).get("name", "")
     name = secure_filename(raw_name).strip()
     if not name:
-        return jsonify({"error": "missing_name"}), 400
+        return jsonify(OrchestratorError("Missing 'name' for session activation.", "Session name is missing or empty.", "missing_session_name").to_payload()), 400
 
     sessions_root = Path(WORKSPACE_DIR) / "sessions"
     session_dir = (sessions_root / name).resolve()
-    sessions_root.mkdir(parents=True, exist_ok=True)
-
     if os.path.commonpath([str(sessions_root.resolve()), str(session_dir)]) != str(sessions_root.resolve()):
-        return jsonify({"error": "access_denied"}), 403
+        return jsonify(OrchestratorError("Access denied to session path.", f"Attempted to activate session at {session_dir} outside of sessions root.", "access_denied").to_payload()), 403
 
-    session_dir.mkdir(parents=True, exist_ok=True)
-    state.active_workspace = str(session_dir)
-    return jsonify({"ok": True, "workspace": state.active_workspace, "session": name})
+    try:
+        sessions_root.mkdir(parents=True, exist_ok=True)
+        session_dir.mkdir(parents=True, exist_ok=True)
+        state.active_workspace = str(session_dir)
+        return jsonify({"ok": True, "workspace": state.active_workspace, "session": name})
+    except OSError as e:
+        log.error("session_activate_os_error", extra={"session_name": name, "error": str(e)}, exc_info=e)
+        return jsonify(OrchestratorError("Failed to activate session due to a server error.", str(e), "session_activation_error").to_payload()), 500
 
 
 @app.get("/api/sessions")
 async def sessions_list():
-    files = [f for f in os.listdir(SESSIONS_DIR) if f.endswith(".json")]
-    return jsonify(sorted(files))
+    try:
+        files = [f for f in os.listdir(SESSIONS_DIR) if f.endswith(".json")]
+        return jsonify(sorted(files))
+    except FileNotFoundError:
+        return jsonify(OrchestratorError("Sessions directory not found.", f"Sessions directory {SESSIONS_DIR} does not exist.", "sessions_dir_not_found").to_payload()), 404
+    except Exception as e:
+        log.error("sessions_list_error", extra={"error": str(e)}, exc_info=e)
+        return jsonify(OrchestratorError("Failed to list sessions due to a server error.", str(e), "sessions_list_error").to_payload()), 500
 
 
 @app.get("/api/sessions/<path:name>")
 async def sessions_get(name: str):
     fp = os.path.join(SESSIONS_DIR, secure_filename(name))
     if not os.path.exists(fp):
-        return jsonify({"error": "not_found"}), 404
-    with open(fp, "r", encoding="utf-8") as f:
-        return jsonify(json.load(f))
+        return jsonify(OrchestratorError(f"Session '{name}' not found.", f"Session file {fp} not found.", "session_not_found").to_payload()), 404
+    try:
+        with open(fp, "r", encoding="utf-8") as f:
+            return jsonify(json.load(f))
+    except json.JSONDecodeError as e:
+        log.error("session_get_json_error", extra={"session_name": name, "error": str(e)}, exc_info=e)
+        return jsonify(OrchestratorError(f"Failed to read session '{name}': invalid format.", str(e), "invalid_session_format").to_payload()), 500
+    except Exception as e:
+        log.error("session_get_error", extra={"session_name": name, "error": str(e)}, exc_info=e)
+        return jsonify(OrchestratorError(f"Failed to retrieve session '{name}' due to a server error.", str(e), "session_retrieval_error").to_payload()), 500
 
 
 @app.post("/api/sessions")
@@ -516,21 +596,29 @@ async def sessions_save():
     data = data or {}
     name = secure_filename(data.get("name", "")).strip()
     if not name:
-        return jsonify({"error": "missing_name"}), 400
+        return jsonify(OrchestratorError("Missing 'name' for session save.", "Session name is missing or empty.", "missing_session_name").to_payload()), 400
 
     fp = os.path.join(SESSIONS_DIR, f"{name}.json")
-    with open(fp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-    return jsonify({"ok": True, "file": fp}), 201
+    try:
+        with open(fp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        return jsonify({"ok": True, "file": fp}), 201
+    except Exception as e:
+        log.error("session_save_error", extra={"session_name": name, "error": str(e)}, exc_info=e)
+        return jsonify(OrchestratorError(f"Failed to save session '{name}' due to a server error.", str(e), "session_save_error").to_payload()), 500
 
 
 @app.delete("/api/sessions/<path:name>")
 async def sessions_delete(name: str):
     fp = os.path.join(SESSIONS_DIR, secure_filename(name))
     if not os.path.exists(fp):
-        return jsonify({"error": "not_found"}), 404
-    os.remove(fp)
-    return jsonify({"ok": True})
+        return jsonify(OrchestratorError(f"Session '{name}' not found.", f"Session file {fp} not found.", "session_not_found").to_payload()), 404
+    try:
+        os.remove(fp)
+        return jsonify({"ok": True})
+    except Exception as e:
+        log.error("session_delete_error", extra={"session_name": name, "error": str(e)}, exc_info=e)
+        return jsonify(OrchestratorError(f"Failed to delete session '{name}' due to a server error.", str(e), "session_delete_error").to_payload()), 500
 
 
 @app.post("/api/transcript/md")
@@ -553,10 +641,18 @@ async def export_md():
 
     md = "\n".join(lines)
     fn = f"transcript_{int(time.time())}.md"
-    fp = _resolve_workspace_path(fn)
-    with open(fp, "w", encoding="utf-8") as f:
-        f.write(md)
-    return jsonify({"ok": True, "file": f"/workspace/{fn}"})
+    try:
+        fp = _resolve_workspace_path(fn)
+    except PermissionError:
+        return jsonify(OrchestratorError("Access denied to workspace path for transcript export.", f"Attempted to export transcript to {fn} outside of workspace root.", "access_denied").to_payload()), 403
+
+    try:
+        with open(fp, "w", encoding="utf-8") as f:
+            f.write(md)
+        return jsonify({"ok": True, "file": f"/workspace/{fn}"})
+    except Exception as e:
+        log.error("export_md_error", extra={"export_name": fn, "error": str(e)}, exc_info=e)
+        return jsonify(OrchestratorError("Failed to export transcript as Markdown due to a server error.", str(e), "export_md_error").to_payload()), 500
 
 
 @app.post("/api/transcript/html")
@@ -571,16 +667,24 @@ async def export_html():
         "<h1>Transcript</h1>",
     ]
     for item in transcript:
-        who = item.get("from")
+        who = html.escape(str(item.get("from") or ""))
         text = (item.get("text") or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         parts.append(f"<div><strong>{who}</strong></div><div class='b'>{text}</div>")
 
-    html = "\n".join(parts)
+    html_content = "\n".join(parts)
     fn = f"transcript_{int(time.time())}.html"
-    fp = _resolve_workspace_path(fn)
-    with open(fp, "w", encoding="utf-8") as f:
-        f.write(html)
-    return jsonify({"ok": True, "file": f"/workspace/{fn}"})
+    try:
+        fp = _resolve_workspace_path(fn)
+    except PermissionError:
+        return jsonify(OrchestratorError("Access denied to workspace path for transcript export.", f"Attempted to export transcript to {fn} outside of workspace root.", "access_denied").to_payload()), 403
+
+    try:
+        with open(fp, "w", encoding="utf-8") as f:
+            f.write(html_content)
+        return jsonify({"ok": True, "file": f"/workspace/{fn}"})
+    except Exception as e:
+        log.error("export_html_error", extra={"export_name": fn, "error": str(e)}, exc_info=e)
+        return jsonify(OrchestratorError("Failed to export transcript as HTML due to a server error.", str(e), "export_html_error").to_payload()), 500
 
 
 @app.get("/")

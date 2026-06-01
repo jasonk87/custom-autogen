@@ -80,6 +80,8 @@ def tool_replace_in_file(path: str, search_string: str, replace_string: str) -> 
 
 def tool_delete(path: str) -> str:
     fp = _safe_path(path)
+    if fp == _safe_path("."):
+        return "Error: Refusing to delete the workspace root."
     if os.path.isdir(fp):
         shutil.rmtree(fp)
     else:
@@ -130,6 +132,51 @@ def tool_fetch_webpage(url: str) -> str:
         return f"Error fetching {url}: {exc}"
     except Exception as e:
         return f"Unexpected error fetching {url}: {e}"
+
+
+def tool_web_search(query: str) -> Dict[str, Any]:
+    """
+    Searches the web through Google Programmable Search Engine.
+    Returns compact source metadata so agents can inspect relevant pages as needed.
+    """
+    search_query = (query or "").strip()
+    if not search_query:
+        return {"error": "Search query is required."}
+
+    api_key = os.environ.get("GOOGLE_API_KEY", "").strip()
+    cse_id = os.environ.get("GOOGLE_CSE_ID", "").strip()
+    if not api_key or not cse_id:
+        return {
+            "error": (
+                "Google search is not configured. Set GOOGLE_API_KEY and "
+                "GOOGLE_CSE_ID in .env, then restart the server."
+            )
+        }
+
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            response = client.get(
+                "https://www.googleapis.com/customsearch/v1",
+                params={"key": api_key, "cx": cse_id, "q": search_query, "num": 5},
+            )
+            response.raise_for_status()
+            payload = response.json()
+    except httpx.HTTPStatusError as exc:
+        return {"error": f"Google search request failed with HTTP {exc.response.status_code}."}
+    except httpx.HTTPError as exc:
+        return {"error": f"Google search request failed: {exc}"}
+    except ValueError:
+        return {"error": "Google search returned an invalid JSON response."}
+
+    results = [
+        {
+            "title": item.get("title", ""),
+            "link": item.get("link", ""),
+            "snippet": item.get("snippet", ""),
+        }
+        for item in payload.get("items", [])
+    ]
+    return {"query": search_query, "results": results}
 
 
 def execute_shell_command(command: str) -> str:
@@ -211,6 +258,7 @@ TOOLS: Dict[str, Any] = {
     "replace_in_file": tool_replace_in_file,
     "delete": tool_delete,
     "share_file": tool_share_file,
+    "web_search": tool_web_search,
     "fetch_webpage": tool_fetch_webpage,
     "execute_shell_command": execute_shell_command,
     "execute_python": execute_python,

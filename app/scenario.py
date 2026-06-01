@@ -14,6 +14,18 @@ class AgentConfig(BaseModel):
 class AgentList(BaseModel):
     agents: List[AgentConfig]
 
+
+def _strip_json_fence(content: str) -> str:
+    text = (content or "").strip()
+    if text.startswith("```"):
+        first_newline = text.find("\n")
+        if first_newline != -1:
+            text = text[first_newline + 1:]
+        if text.endswith("```"):
+            text = text[:-3]
+    return text.strip()
+
+
 async def generate_agents_from_scenario(scenario: str, model: str, num_agents: int = 3) -> List[Dict[str, Any]]:
     """
     Generates a list of agents from a scenario description using an LLM
@@ -59,21 +71,8 @@ Do NOT output the JSON schema. Output the actual instantiated agents!
         messages=[UserMessage(content=prompt, source="user")]
     )
 
-    response_text = response.content
-
-    # The response content is a JSON string, which we can validate with our Pydantic model
-    # It might be wrapped in ```json ... ``` so we clean it.
-    if "```json" in response_text:
-        response_text = response_text.split("```json")[1].split("```")[0].strip()
-    elif "```" in response_text:
-        response_text = response_text.split("```")[1].split("```")[0].strip()
-
-    try:
-        agent_list_obj = AgentList.model_validate_json(response_text)
-    except Exception:
-        # Fallback if parsing fails, maybe just return empty or retry (for now, empty/error)
-        # Try to clean harder or just fail
-        agent_list_obj = AgentList.model_validate_json(response_text)
+    response_text = _strip_json_fence(response.content)
+    agent_list_obj = AgentList.model_validate_json(response_text)
 
 
     # Convert the Pydantic models back to dictionaries for the rest of the app
@@ -98,7 +97,7 @@ Please only output the goal as a single string in the following JSON format: {{"
     )
 
     try:
-        goal_data = json.loads(goal_response.content.strip())
+        goal_data = json.loads(_strip_json_fence(goal_response.content))
         suggested_goal = goal_data.get("goal", "")
     except Exception:
         suggested_goal = goal_response.content.strip()

@@ -157,6 +157,8 @@ def get_model_client(selection: Optional[str], temperature: float = 0.3, respons
             "temperature": temperature,
             "model_info": gemini_model_info(model),
         }
+        if model == "gemini-2.5-flash-lite":
+            kwargs["reasoning_effort"] = "high"
         if response_format is not None:
             kwargs["response_format"] = response_format
         return OpenAIChatCompletionClient(**kwargs)

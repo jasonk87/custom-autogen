@@ -12,12 +12,20 @@ async def test_index_html_structure():
     # Check for critical sections
     assert 'id="setup"' in html
     assert 'id="chat"' in html
+    assert 'class="chat-empty"' in html
+    assert 'id="empty-open-setup"' in html
+    assert 'id="stop-run"' in html
+    assert 'id="jump-latest"' in html
     assert 'id="work"' in html
 
     # Check for new consolidated sections
     assert '<details' in html
     assert 'Advanced Configuration' in html
     assert 'Add Manual Bot' in html
+    assert 'Human Proxy' in html
+    assert 'Consult me' in html
+    assert 'Delegate routine' in html
+    assert 'Workspace autonomy' in html
 
     # Check that Ollama settings are gone
     assert 'Ollama Base URL' not in html

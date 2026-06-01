@@ -29,9 +29,9 @@ def _safe_path(path: str) -> str:
     except Exception:
         workspace = WORKSPACE_DIR
 
-    base = os.path.abspath(workspace)
-    p = os.path.abspath(os.path.join(base, path))
-    if not p.startswith(base + os.sep) and p != base:
+    base = os.path.realpath(workspace)
+    p = os.path.realpath(os.path.join(base, path))
+    if os.path.commonpath([base, p]) != base:
         raise ValueError("Path is outside the allowed workspace directory.")
     return p
 
@@ -51,7 +51,7 @@ def tree_listing(root: str) -> Dict[str, Any]:
         rel_path = os.path.relpath(p, workspace)
         if rel_path == ".":
             rel_path = ""
-        node = {"name": os.path.basename(p) or os.path.basename(root_abs), "type": "dir", "path": rel_path, "children": []}
+        node = {"name": "." if not rel_path else os.path.basename(p), "type": "dir", "path": rel_path, "children": []}
         try:
             for nm in sorted(os.listdir(p)):
                 fp = os.path.join(p, nm)

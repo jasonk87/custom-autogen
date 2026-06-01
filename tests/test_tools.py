@@ -1,5 +1,9 @@
 import os
-from app.tools import execute_shell_command
+from unittest import mock
+
+import httpx
+
+from app.tools import execute_shell_command, tool_delete, tool_web_search
 from app.config import WORKSPACE_DIR
 
 def test_execute_shell_command_echo():
@@ -34,3 +38,29 @@ def test_execute_shell_command_error():
     assert "Error executing command" in result
     assert "Stderr:" in result
     assert "non_existent_directory_for_sure" in result
+
+def test_tool_delete_rejects_workspace_root():
+    assert tool_delete(".") == "Error: Refusing to delete the workspace root."
+
+
+def test_tool_web_search_requires_configuration(monkeypatch):
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_CSE_ID", raising=False)
+    result = tool_web_search("test query")
+    assert "not configured" in result["error"]
+
+
+def test_tool_web_search_returns_compact_results(monkeypatch):
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    monkeypatch.setenv("GOOGLE_CSE_ID", "test-cse")
+    response = mock.Mock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {
+        "items": [{"title": "Example", "link": "https://example.com", "snippet": "Example result"}]
+    }
+    with mock.patch.object(httpx.Client, "get", return_value=response):
+        result = tool_web_search("test query")
+    assert result == {
+        "query": "test query",
+        "results": [{"title": "Example", "link": "https://example.com", "snippet": "Example result"}],
+    }

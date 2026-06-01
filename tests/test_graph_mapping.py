@@ -1,6 +1,14 @@
 import pytest
 from unittest.mock import Mock
-from autogen_agentchat.messages import TextMessage, SelectSpeakerEvent
+from autogen_agentchat.messages import (
+    SelectSpeakerEvent,
+    TextMessage,
+    ToolCallExecutionEvent,
+    ToolCallRequestEvent,
+    ToolCallSummaryMessage,
+)
+from autogen_core import FunctionCall
+from autogen_core.models import FunctionExecutionResult
 
 # Import app.core if present; skip the module if not.
 core = pytest.importorskip("app.core", reason="app.core not found")
@@ -48,3 +56,49 @@ def test_select_speaker_event_maps_to_agent_edge():
     assert edge is not None
     assert edge.get("from") == "test_manager"
     assert edge.get("to") == "Agent2"
+
+
+def test_tool_request_maps_to_structured_payload():
+    payload = _create_graph_payload(
+        ToolCallRequestEvent(
+            source="Finder",
+            content=[FunctionCall(id="1", name="tool_web_search", arguments='{"query":"rentals"}')],
+        ),
+        Mock(),
+    )
+
+    assert payload == {"type": "tool_request", "sender": "Finder", "tools": ["tool_web_search"]}
+
+
+def test_tool_result_maps_to_structured_search_payload():
+    payload = _create_graph_payload(
+        ToolCallExecutionEvent(
+            source="Finder",
+            content=[
+                FunctionExecutionResult(
+                    call_id="1",
+                    name="tool_web_search",
+                    content="{'query': 'rentals', 'results': [{'title': 'Listing', 'link': 'https://example.com', 'snippet': 'Three bedrooms'}]}",
+                )
+            ],
+        ),
+        Mock(),
+    )
+
+    assert payload["type"] == "tool_result"
+    assert payload["results"][0]["query"] == "rentals"
+    assert payload["results"][0]["results"][0]["title"] == "Listing"
+
+
+def test_tool_summary_message_is_filtered_after_structured_result():
+    payload = _create_graph_payload(
+        ToolCallSummaryMessage(
+            source="Finder",
+            content="raw duplicate result",
+            tool_calls=[FunctionCall(id="1", name="tool_web_search", arguments="{}")],
+            results=[FunctionExecutionResult(call_id="1", name="tool_web_search", content="{}")],
+        ),
+        Mock(),
+    )
+
+    assert payload is None

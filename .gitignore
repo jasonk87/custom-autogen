@@ -8,9 +8,13 @@ __pycache__/
 
 # Logs
 *.log
+.env
 
 # Workspace and tool outputs
 autogen_work_dir/
+.orion/
+.squad_backups/
+.squad_cache/
 ollama_install/
 run_and_test.sh
 run_e2e_test.sh
