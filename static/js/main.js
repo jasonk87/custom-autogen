@@ -501,7 +501,18 @@ async function startRun() {
     }
 
     const d = JSON.parse(ev.data);
-    if (d.type === 'status') setStatus(d.state);
+    if (d.type === 'status') {
+      if (d.state === 'error') {
+        toast(`Error: ${d.user_message}`);
+        addMsg('System', `**Error:** ${d.user_message}`);
+        es.close();
+        runActive = false;
+        setStatus('idle');
+        buttons(false);
+      } else {
+        setStatus(d.state);
+      }
+    }
     else if (d.type === 'tool_request') addToolRequest(d.sender, d.tools);
     else if (d.type === 'tool_result') addToolResult(d.sender, d.results);
     else if (d.type === 'chat') {
