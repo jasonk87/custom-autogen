@@ -1,4 +1,5 @@
 import asyncio
+import ast
 import json
 import queue
 import random
@@ -13,6 +14,7 @@ from autogen_agentchat.messages import (
     TextMessage,
     ToolCallExecutionEvent,
     ToolCallRequestEvent,
+    ToolCallSummaryMessage,
 )
 from autogen_agentchat.teams import SelectorGroupChat
 from autogen_core import CancellationToken
@@ -33,6 +35,24 @@ DELEGATE_SAFE_TOOL_NAMES = {
     "execute_python",
 }
 AUTONOMOUS_WORKSPACE_TOOL_NAMES = DELEGATE_SAFE_TOOL_NAMES | {"delete"}
+TOOL_REFLECTION_GUIDANCE = (
+    "\n\nWhen you use a tool, follow the tool result with a concise message to the room. "
+    "Summarize the useful evidence, explain what it changes, and recommend the next step "
+    "so teammates can build on your work instead of repeating the same tool call."
+)
+
+
+def _parse_tool_result(content: Any) -> Any:
+    if not isinstance(content, str):
+        return content
+    for parser in (json.loads, ast.literal_eval):
+        try:
+            parsed = parser(content)
+            json.dumps(parsed)
+            return parsed
+        except (ValueError, SyntaxError, TypeError, json.JSONDecodeError):
+            continue
+    return content
 
 
 def _normalize_human_proxy_mode(mode: str | bool | None) -> str:
@@ -123,21 +143,19 @@ def _create_graph_payload(
     elif isinstance(message, ToolCallRequestEvent):
         tool_names = [call.name for call in message.content]
         payload = {
-            "type": "chat",
+            "type": "tool_request",
             "sender": message.source,
-            "message": f"Calling tools: {', '.join(tool_names)}",
+            "tools": tool_names,
         }
     elif isinstance(message, ToolCallExecutionEvent):
-        results = []
-        for res in message.content:
-            result_text = str(res.content)
-            results.append(result_text[:200] + ("..." if len(result_text) > 200 else ""))
         payload = {
-            "type": "chat",
+            "type": "tool_result",
             "sender": message.source,
-            "message": f"Tool output: {'; '.join(results)}",
+            "results": [_parse_tool_result(res.content) for res in message.content],
             "is_tool_execution": True,
         }
+    elif isinstance(message, ToolCallSummaryMessage):
+        return None
     elif isinstance(message, BaseChatMessage):
         txt = message.to_text().strip()
         if not txt:
@@ -280,9 +298,9 @@ async def run_orchestrator(
                 "name": "Human_Admin",
                 "description": "Delegated representative for the human user. Select this agent for routine product-owner decisions and workspace actions.",
                 "model_client": gemini_client,
-                "system_message": _human_proxy_prompt(human_proxy_mode, human_proxy_preferences),
+                "system_message": _human_proxy_prompt(human_proxy_mode, human_proxy_preferences) + TOOL_REFLECTION_GUIDANCE,
                 "model_client_stream": False,
-                "reflect_on_tool_use": False,
+                "reflect_on_tool_use": True,
             }
             if supports_tools and allow_tools:
                 human_admin_kwargs["tools"] = _tools_for_human_proxy(human_proxy_mode)
@@ -315,9 +333,9 @@ async def run_orchestrator(
             agent_kwargs = {
                 "name": agent_cfg["name"],
                 "model_client": gemini_client,
-                "system_message": agent_cfg.get("system", "You are a helpful assistant."),
+                "system_message": agent_cfg.get("system", "You are a helpful assistant.") + TOOL_REFLECTION_GUIDANCE,
                 "model_client_stream": False,
-                "reflect_on_tool_use": False,
+                "reflect_on_tool_use": True,
             }
             if supports_tools and allow_tools:
                 agent_kwargs["tools"] = list(TOOLS.values())

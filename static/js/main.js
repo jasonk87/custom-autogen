@@ -28,6 +28,17 @@ function inlineMarkdown(value) {
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
 }
 
+function safeUrl(value, { allowWorkspace = false } = {}) {
+  const raw = String(value ?? '').trim();
+  if (allowWorkspace && raw.startsWith('/workspace/')) return raw;
+  try {
+    const url = new URL(raw, window.location.origin);
+    return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
+  } catch {
+    return '';
+  }
+}
+
 function renderMarkdown(value) {
   const lines = String(value ?? '').replace(/\r\n?/g, '\n').split('\n');
   const blocks = [];
@@ -66,9 +77,17 @@ function renderMarkdown(value) {
     }
 
     const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    const image = line.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
     const unordered = line.match(/^\s*[-*]\s+(.+)$/);
     const ordered = line.match(/^\s*\d+\.\s+(.+)$/);
-    if (heading) {
+    if (image) {
+      flushParagraph();
+      flushList();
+      const src = safeUrl(image[2], { allowWorkspace: true });
+      if (src) {
+        blocks.push(`<figure class="chat-image"><img src="${escapeHtml(src)}" alt="${escapeHtml(image[1] || 'Shared image')}" loading="lazy"><figcaption>${escapeHtml(image[1] || 'Shared image')}</figcaption></figure>`);
+      }
+    } else if (heading) {
       flushParagraph();
       flushList();
       const level = heading[1].length + 2;
@@ -91,6 +110,86 @@ function renderMarkdown(value) {
   flushParagraph();
   flushList();
   return blocks.join('');
+}
+
+function appendChatBox(sender, className = '') {
+  const chat = $('#chat');
+  if (!chat) return null;
+  const follow = shouldFollowChat(chat);
+  const box = document.createElement('div');
+  box.className = `bubble from-them ${className}`.trim();
+  const who = document.createElement('div');
+  who.className = 'who';
+  who.textContent = sender;
+  box.append(who);
+  chat.append(box);
+  if (follow) scrollChatToLatest(chat);
+  else revealLatestButton();
+  return { chat, box };
+}
+
+function addToolRequest(sender, tools) {
+  const entry = appendChatBox(sender, 'tool-card tool-request');
+  if (!entry) return;
+  const content = document.createElement('div');
+  content.className = 'tool-card-row';
+  const badge = document.createElement('span');
+  badge.className = 'tool-badge';
+  badge.textContent = 'Tool call';
+  const text = document.createElement('span');
+  text.textContent = (tools || []).join(', ') || 'Preparing tool';
+  content.append(badge, text);
+  entry.box.append(content);
+}
+
+function addToolResult(sender, results) {
+  const entry = appendChatBox(sender, 'tool-card tool-result');
+  if (!entry) return;
+  const heading = document.createElement('div');
+  heading.className = 'tool-card-row';
+  const badge = document.createElement('span');
+  badge.className = 'tool-badge tool-badge-success';
+  badge.textContent = 'Tool result';
+  heading.append(badge, document.createTextNode(' Completed'));
+  entry.box.append(heading);
+
+  (results || []).forEach(result => {
+    if (result && typeof result === 'object' && Array.isArray(result.results)) {
+      const meta = document.createElement('div');
+      meta.className = 'tool-query';
+      meta.textContent = result.query ? `Query: ${result.query}` : 'Sources found';
+      entry.box.append(meta);
+      const list = document.createElement('div');
+      list.className = 'search-results';
+      result.results.forEach(item => {
+        const link = safeUrl(item.link);
+        const card = document.createElement(link ? 'a' : 'div');
+        card.className = 'search-result';
+        if (link) {
+          card.href = link;
+          card.target = '_blank';
+          card.rel = 'noopener noreferrer';
+        }
+        const title = document.createElement('strong');
+        title.textContent = item.title || link || 'Search result';
+        const snippet = document.createElement('span');
+        snippet.textContent = item.snippet || '';
+        card.append(title, snippet);
+        list.append(card);
+      });
+      entry.box.append(list);
+      return;
+    }
+    const details = document.createElement('details');
+    details.className = 'tool-details';
+    const summary = document.createElement('summary');
+    summary.textContent = 'View output';
+    const body = document.createElement('pre');
+    body.textContent = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+    details.append(summary, body);
+    entry.box.append(details);
+  });
+  refreshTree();
 }
 
 function shouldFollowChat(chat) {
@@ -403,9 +502,10 @@ async function startRun() {
 
     const d = JSON.parse(ev.data);
     if (d.type === 'status') setStatus(d.state);
+    else if (d.type === 'tool_request') addToolRequest(d.sender, d.tools);
+    else if (d.type === 'tool_result') addToolResult(d.sender, d.results);
     else if (d.type === 'chat') {
         addMsg(d.sender, d.message);
-        if (d.is_tool_execution) refreshTree();
     }
     else if (d.type === 'stream_start') addMsg(d.sender, '', false, d.id);
     else if (d.type === 'token') appendToken(d.id, d.delta);

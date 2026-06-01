@@ -5,6 +5,7 @@ import io
 import json
 import queue
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.server import _run_orchestrator_thread, app
 from app.state import state
@@ -208,6 +209,26 @@ async def test_agent_run_unexpected_error(client):
         data = await resp.get_json()
         assert data.get("error_code") == "orchestrator_error"
         assert "unexpected error" in data.get("user_message").lower()
+
+async def test_agent_run_reflects_after_tool_use(client):
+    with (
+        mock.patch.dict(app.config, {'TESTING': False}),
+        mock.patch('app.server.get_model_client', return_value=mock.Mock()),
+        mock.patch('app.server.AssistantAgent') as mock_agent,
+    ):
+        mock_agent.return_value.run = mock.AsyncMock(
+            return_value=SimpleNamespace(messages=[SimpleNamespace(content="I found a useful result.")])
+        )
+        resp = await client.post("/api/agent/run", json={
+            "agent": {"name": "Finder", "system_message": "Search for evidence.", "tools": ["web_search"]},
+            "message": "Find a source.",
+            "model": "gemini-pro"
+        })
+
+    assert resp.status_code == 200
+    assert (await resp.get_json())["reply"] == "I found a useful result."
+    assert mock_agent.call_args.kwargs["reflect_on_tool_use"] is True
+    assert "follow the tool result with a concise message" in mock_agent.call_args.kwargs["system_message"]
 
 # --- New tests for _run_orchestrator_thread error handling ---
 

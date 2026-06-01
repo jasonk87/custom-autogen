@@ -27,7 +27,7 @@ from app.config import (
     gemini_model_info,
     require_gemini_api_key,
 )
-from app.core import run_orchestrator, OrchestratorError
+from app.core import TOOL_REFLECTION_GUIDANCE, run_orchestrator, OrchestratorError
 from app.scenario import generate_agents_from_scenario
 from app.state import state
 from app.tools import TOOLS
@@ -315,10 +315,10 @@ async def api_agent_run():
         agent = AssistantAgent(
             name=agent_config.get("name", "playground_agent"),
             model_client=model_client,
-            system_message=agent_config.get("system_message", "You are a helpful assistant."),
+            system_message=agent_config.get("system_message", "You are a helpful assistant.") + TOOL_REFLECTION_GUIDANCE,
             model_client_stream=False,
             tools=selected_tools,
-            reflect_on_tool_use=False,
+            reflect_on_tool_use=True,
         )
 
         result = await agent.run(task=message, cancellation_token=CancellationToken())
