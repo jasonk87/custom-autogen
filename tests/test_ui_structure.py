@@ -58,6 +58,11 @@ def test_stream_errors_reconnect_to_active_run():
     assert "async function resumeSimulation()" in script
     assert "/api/run/resume" in script
     assert "Simulation paused" in script
+    assert "function beginNewSetup()" in script
+    assert "function clearDraftSetup()" in script
+    assert "$('#scenario').addEventListener('input', beginNewSetup)" in script
+    assert "$('#goal').addEventListener('input', beginNewSetup)" in script
+    assert "clearDraftSetup();\n    renderTeam();" in script
     assert "/api/run/status?run_token=" in script
     assert "localStorage.removeItem(ACTIVE_RUN_URL_KEY)" in script
     assert "es.close();\n        localStorage.removeItem(ACTIVE_RUN_URL_KEY);" in script

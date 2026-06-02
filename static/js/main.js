@@ -447,16 +447,17 @@ function renderTeam() {
   `).join('');
 
   $$('.name').forEach(el => {
-    el.onchange = () => { agents[+el.dataset.i].name = el.value.trim(); saveSession(); };
+    el.onchange = () => { beginNewSetup(); agents[+el.dataset.i].name = el.value.trim(); saveSession(); };
   });
   $$('.sys').forEach(el => {
-    el.onchange = () => { agents[+el.dataset.i].system = el.value; saveSession(); };
+    el.onchange = () => { beginNewSetup(); agents[+el.dataset.i].system = el.value; saveSession(); };
   });
   $$('.num').forEach(el => {
-    el.onchange = () => { agents[+el.dataset.i].temperature = parseFloat(el.value || '0.3'); saveSession(); };
+    el.onchange = () => { beginNewSetup(); agents[+el.dataset.i].temperature = parseFloat(el.value || '0.3'); saveSession(); };
   });
   $$('.up').forEach(el => {
     el.onclick = () => {
+      beginNewSetup();
       const i = +el.dataset.i;
       if (i <= 0) return;
       [agents[i - 1], agents[i]] = [agents[i], agents[i - 1]];
@@ -466,6 +467,7 @@ function renderTeam() {
   });
   $$('.down').forEach(el => {
     el.onclick = () => {
+      beginNewSetup();
       const i = +el.dataset.i;
       if (i >= agents.length - 1) return;
       [agents[i + 1], agents[i]] = [agents[i], agents[i + 1]];
@@ -475,6 +477,7 @@ function renderTeam() {
   });
   $$('.rm').forEach(el => {
     el.onclick = () => {
+      beginNewSetup();
       agents.splice(+el.dataset.i, 1);
       renderTeam();
       saveSession();
@@ -498,6 +501,23 @@ function buttons(running, resumable = false) {
   }
   $('#stop-run')?.classList.toggle('hidden', !running);
   $('#resume-run')?.classList.toggle('hidden', !resumable || running);
+}
+
+function beginNewSetup() {
+  if (runActive || !runCanResume) return;
+  localStorage.removeItem(ACTIVE_RUN_URL_KEY);
+  runCanResume = false;
+  window.__transcript = [];
+  $('#chat').innerHTML = '';
+  setStatus('idle');
+  buttons(false);
+}
+
+function clearDraftSetup() {
+  localStorage.removeItem(SESSION_KEY);
+  agents = [];
+  $('#scenario').value = '';
+  $('#goal').value = '';
 }
 
 async function stopSimulation() {
@@ -625,6 +645,8 @@ async function reconnectActiveRun() {
     localStorage.removeItem(ACTIVE_RUN_URL_KEY);
     return false;
   }
+  loadSession();
+  renderTeam();
   runCanResume = Boolean(status.resumable);
   reconnectUrl.searchParams.set('resume_only', 'true');
   connectRunStream(`${reconnectUrl.pathname}?${reconnectUrl.searchParams.toString()}`);
@@ -1032,6 +1054,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const name = $('#bot-title').value.trim();
     if (!name) return;
 
+    beginNewSetup();
     agents.push({
       name: name.replace(/[^a-zA-Z0-9_]/g, '_'),
       system: $('#bot-description').value,
@@ -1048,6 +1071,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const scenario = $('#scenario').value.trim();
     if (!scenario) return;
 
+    beginNewSetup();
     const btn = $('#generate-agents');
     btn.disabled = true;
     btn.textContent = 'Generating...';
@@ -1111,6 +1135,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
       const item = normalizeSavedArtifact(file, raw);
       const d = item.payload;
+      beginNewSetup();
       agents = d.agents || [];
       if (item.artifactType === 'scenario') {
         $('#scenario').value = d.scenario || '';
@@ -1217,7 +1242,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('#resume-run').onclick = resumeSimulation;
   $('#jump-latest').onclick = () => scrollChatToLatest($('#chat'));
 
+  $('#scenario').addEventListener('input', beginNewSetup);
   $('#scenario').addEventListener('change', saveSession);
+  $('#goal').addEventListener('input', beginNewSetup);
   $('#goal').addEventListener('change', saveSession);
   $('#mode').addEventListener('change', saveSession);
   $('#conversation-mode').addEventListener('change', () => {
@@ -1254,13 +1281,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
   }
 
-  loadSession();
   await loadOllamaSettings();
   await loadModels();
   renderTeam();
   updateHumanProxyPreferencesVisibility();
   updateConversationModeHint();
   if (!await reconnectActiveRun()) {
+    clearDraftSetup();
+    renderTeam();
     setStatus('idle');
     buttons(false);
   }
