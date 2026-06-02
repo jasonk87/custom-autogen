@@ -14,6 +14,8 @@ from app.core import (
     _message_requests_agent,
     _normalize_human_proxy_mode,
     _normalize_conversation_mode,
+    _agent_tools_enabled,
+    _relationship_prompt,
     _specialist_coordination_prompt,
     _tools_for_human_proxy,
     run_orchestrator,
@@ -117,6 +119,90 @@ def test_specialist_prompt_is_role_bound_but_open_ended():
     assert "Do not become a generic assistant" in prompt
     assert "creative, playful, or exploratory" in prompt
     assert "Do not force a work plan" in prompt
+
+
+def test_relationship_prompt_injects_social_context_without_metadata_language():
+    prompt = _relationship_prompt(
+        {
+            "name": "CEO_Carla",
+            "relationships": [
+                {
+                    "target": "Lead_Developer_Dan",
+                    "relation": "Boss",
+                    "notes": "You trust Dan's technical judgment but expect concise updates.",
+                }
+            ],
+        }
+    )
+    assert "Known relationships:" in prompt
+    assert "You are Boss to Lead_Developer_Dan." in prompt
+    assert "guide tone, trust, disagreement, loyalty" in prompt
+
+
+def test_relationship_prompt_omits_empty_relationships():
+    assert _relationship_prompt({"name": "Solo", "relationships": []}) == ""
+
+
+def test_agent_tool_permission_requires_global_and_agent_switches():
+    assert _agent_tools_enabled({}, True) is True
+    assert _agent_tools_enabled({"tools_enabled": True}, True) is True
+    assert _agent_tools_enabled({"tools_enabled": False}, True) is False
+    assert _agent_tools_enabled({"tools_enabled": True}, False) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("global_allow_tools", "agent_tools_enabled", "expects_tools"),
+    [(True, True, True), (True, False, False), (False, True, False)],
+)
+async def test_runtime_respects_agent_and_global_tool_permissions(
+    global_allow_tools,
+    agent_tools_enabled,
+    expects_tools,
+):
+    created = []
+
+    class FakeAgent:
+        def __init__(self, name, **kwargs):
+            self.name = name
+            created.append((name, kwargs))
+
+    class FakeGroupChat:
+        def __init__(self, **kwargs):
+            del kwargs
+
+        async def run_stream(self, **kwargs):
+            del kwargs
+            if False:
+                yield None
+
+    with (
+        mock.patch("app.core.get_model_client", return_value=mock.Mock()),
+        mock.patch("app.core.model_supports_tools", return_value=True),
+        mock.patch("app.core.AssistantAgent", FakeAgent),
+        mock.patch("app.core.UserProxyAgent", FakeAgent),
+        mock.patch("app.core.SelectorGroupChat", FakeGroupChat),
+    ):
+        await run_orchestrator(
+            "Work.",
+            "test-model",
+            [
+                {
+                    "name": "Engineer",
+                    "system": "Build.",
+                    "tools_enabled": agent_tools_enabled,
+                    "relationships": [{"target": "Reviewer", "relation": "Coworker", "notes": "Coordinate."}],
+                },
+                {"name": "Reviewer", "system": "Review.", "tools_enabled": False},
+            ],
+            "round_robin",
+            queue.Queue(),
+            allow_tools=global_allow_tools,
+        )
+
+    engineer_kwargs = next(kwargs for name, kwargs in created if name == "Engineer")
+    assert ("tools" in engineer_kwargs) is expects_tools
+    assert "You are Coworker to Reviewer." in engineer_kwargs["system_message"]
 
 
 def test_message_requests_agent_requires_latest_non_admin_message():

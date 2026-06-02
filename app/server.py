@@ -316,6 +316,7 @@ async def scenario_generate():
     scenario = (data or {}).get("scenario")
     model = (data or {}).get("model")
     num_agents = (data or {}).get("num_agents", 3)
+    conversation_mode = (data or {}).get("conversation_mode", "discussion")
 
     if not scenario or not isinstance(scenario, str):
         return jsonify(OrchestratorError("Missing or invalid 'scenario' in request.", "Scenario is missing or not a string.", "invalid_scenario_input").to_payload()), 400
@@ -327,7 +328,12 @@ async def scenario_generate():
     try:
         for attempt in range(1, SCENARIO_GENERATION_ATTEMPTS + 1):
             try:
-                agents, suggested_goal = await generate_agents_from_scenario(scenario, model, num_agents)
+                agents, suggested_goal = await generate_agents_from_scenario(
+                    scenario,
+                    model,
+                    num_agents,
+                    conversation_mode,
+                )
                 return jsonify({"agents": agents, "goal": suggested_goal})
             except Exception as e:
                 if not _is_transient_provider_error(e) or attempt == SCENARIO_GENERATION_ATTEMPTS:

@@ -14,6 +14,11 @@ const ACTIVE_RUN_URL_KEY = 'agentStudioActiveRunUrl';
 const MODEL_DEFAULT_VERSION_KEY = 'agentStudioModelDefaultVersion';
 const MODEL_DEFAULT_VERSION = 'gemini-2.5-flash-lite-max-thinking-v1';
 const PREFERRED_MODEL = 'gemini::cloud::gemini-2.5-flash-lite';
+const RELATIONSHIP_TYPES = [
+  'Boss', 'Employee', 'Coworker', 'Mentor', 'Student', 'Friend', 'Rival', 'Sibling',
+  'Parent', 'Child', 'Spouse', 'Partner', 'Ally', 'Enemy', 'Trusted', 'Distrusted',
+  'Protector', 'Dependent', 'Advisor', 'Client'
+];
 
 function createRunToken() {
   if (typeof globalThis.crypto?.randomUUID === 'function') {
@@ -226,6 +231,42 @@ function humanProxyMode() {
   return $('input[name="human-proxy-mode"]:checked')?.value || 'consult';
 }
 
+function normalizeAgents(rawAgents = []) {
+  const roster = (Array.isArray(rawAgents) ? rawAgents : []).map(agent => ({
+    ...agent,
+    name: String(agent?.name || ''),
+    system: String(agent?.system || ''),
+    temperature: Number.isFinite(Number(agent?.temperature)) ? Number(agent.temperature) : 0.3,
+    tools_enabled: agent?.tools_enabled !== false,
+    relationships: Array.isArray(agent?.relationships) ? agent.relationships : []
+  }));
+  const names = new Set(roster.map(agent => agent.name));
+  roster.forEach(agent => {
+    agent.relationships = agent.relationships
+      .filter(relationship => relationship && typeof relationship === 'object')
+      .map(relationship => ({
+        target: String(relationship.target || ''),
+        relation: String(relationship.relation || '').trim(),
+        notes: String(relationship.notes || '')
+      }))
+      .filter(relationship => relationship.target && relationship.relation && relationship.target !== agent.name && names.has(relationship.target));
+  });
+  return roster;
+}
+
+function relationshipTypeOptions(relation) {
+  const custom = relation && !RELATIONSHIP_TYPES.includes(relation);
+  return [...RELATIONSHIP_TYPES, 'Custom'].map(type => (
+    `<option value='${escapeHtml(type)}' ${type === (custom ? 'Custom' : relation) ? 'selected' : ''}>${escapeHtml(type)}</option>`
+  )).join('');
+}
+
+function relationshipTargetOptions(agentIndex, target) {
+  return agents.map((agent, index) => index === agentIndex ? '' : (
+    `<option value='${escapeHtml(agent.name)}' ${agent.name === target ? 'selected' : ''}>${escapeHtml(agent.name)}</option>`
+  )).join('');
+}
+
 function normalizeManagerMode(mode) {
   const normalized = String(mode || '').toLowerCase().replace(/[\s_-]/g, '');
   if (normalized === 'auto' || normalized === 'smartsupervisor') return 'smart_supervisor';
@@ -422,6 +463,7 @@ function renderTeam() {
   const container = $('#team');
   if (!container) return;
 
+  agents = normalizeAgents(agents);
   $('#team-count').textContent = `${agents.length} members`;
   if (!agents.length) {
     container.innerHTML = "<div style='color:var(--muted); padding:12px; border:1px dashed var(--border); border-radius:8px;'>No agents in team.</div>";
@@ -440,20 +482,102 @@ function renderTeam() {
       </div>
       <textarea data-i='${i}' class='sys' placeholder='System Message'>${escapeHtml(a.system)}</textarea>
       <div class='team-item-footer'>
+        <label class='agent-tools-toggle'><input data-i='${i}' class='agent-tools' type='checkbox' ${a.tools_enabled ? 'checked' : ''} /> Allow Tools</label>
         <label>Temp</label>
         <input data-i='${i}' class='num' type='number' min='0' max='2' step='0.1' value='${escapeHtml(a.temperature ?? 0.3)}' />
+      </div>
+      <div class='relationships-panel'>
+        <div class='relationships-header'>
+          <span>Relationships</span>
+          <button data-i='${i}' class='btn btn-neutral relationship-add' type='button'>+ Add Relationship</button>
+        </div>
+        <div class='relationships-list'>
+          ${(a.relationships || []).map((relationship, relationshipIndex) => {
+            const custom = !RELATIONSHIP_TYPES.includes(relationship.relation);
+            return `
+              <div class='relationship-row'>
+                <select data-i='${i}' data-r='${relationshipIndex}' class='relationship-relation' aria-label='Relationship type'>
+                  ${relationshipTypeOptions(relationship.relation)}
+                </select>
+                <select data-i='${i}' data-r='${relationshipIndex}' class='relationship-target' aria-label='Relationship target'>
+                  ${relationshipTargetOptions(i, relationship.target)}
+                </select>
+                <input data-i='${i}' data-r='${relationshipIndex}' class='relationship-custom ${custom ? '' : 'hidden'}' value='${escapeHtml(custom && relationship.relation !== 'Custom' ? relationship.relation : '')}' placeholder='Custom relation...' />
+                <textarea data-i='${i}' data-r='${relationshipIndex}' class='relationship-notes' placeholder='Optional relationship notes...'>${escapeHtml(relationship.notes || '')}</textarea>
+                <button data-i='${i}' data-r='${relationshipIndex}' class='btn btn-danger relationship-remove' type='button' title='Remove relationship'>x</button>
+              </div>
+            `;
+          }).join('')}
+        </div>
       </div>
     </div>
   `).join('');
 
   $$('.name').forEach(el => {
-    el.onchange = () => { beginNewSetup(); agents[+el.dataset.i].name = el.value.trim(); saveSession(); };
+    el.onchange = () => {
+      beginNewSetup();
+      const agent = agents[+el.dataset.i];
+      const oldName = agent.name;
+      agent.name = el.value.trim();
+      agents.forEach(item => item.relationships.forEach(relationship => {
+        if (relationship.target === oldName) relationship.target = agent.name;
+      }));
+      renderTeam();
+      saveSession();
+    };
   });
   $$('.sys').forEach(el => {
     el.onchange = () => { beginNewSetup(); agents[+el.dataset.i].system = el.value; saveSession(); };
   });
   $$('.num').forEach(el => {
     el.onchange = () => { beginNewSetup(); agents[+el.dataset.i].temperature = parseFloat(el.value || '0.3'); saveSession(); };
+  });
+  $$('.agent-tools').forEach(el => {
+    el.onchange = () => { beginNewSetup(); agents[+el.dataset.i].tools_enabled = el.checked; saveSession(); };
+  });
+  $$('.relationship-add').forEach(el => {
+    el.onclick = () => {
+      beginNewSetup();
+      const i = +el.dataset.i;
+      const target = agents.find((_, index) => index !== i)?.name;
+      if (!target) {
+        toast('Add another agent before creating a relationship.');
+        return;
+      }
+      agents[i].relationships.push({ target, relation: 'Coworker', notes: '' });
+      renderTeam();
+      saveSession();
+    };
+  });
+  $$('.relationship-remove').forEach(el => {
+    el.onclick = () => {
+      beginNewSetup();
+      agents[+el.dataset.i].relationships.splice(+el.dataset.r, 1);
+      renderTeam();
+      saveSession();
+    };
+  });
+  $$('.relationship-target').forEach(el => {
+    el.onchange = () => { beginNewSetup(); agents[+el.dataset.i].relationships[+el.dataset.r].target = el.value; saveSession(); };
+  });
+  $$('.relationship-relation').forEach(el => {
+    el.onchange = () => {
+      beginNewSetup();
+      const relationship = agents[+el.dataset.i].relationships[+el.dataset.r];
+      relationship.relation = el.value;
+      renderTeam();
+      saveSession();
+    };
+  });
+  $$('.relationship-custom').forEach(el => {
+    el.oninput = () => {
+      beginNewSetup();
+      agents[+el.dataset.i].relationships[+el.dataset.r].relation = el.value.trim() || 'Custom';
+      saveSession();
+    };
+  });
+  $$('.relationship-notes').forEach(el => {
+    el.oninput = () => { beginNewSetup(); agents[+el.dataset.i].relationships[+el.dataset.r].notes = el.value; saveSession(); };
   });
   $$('.up').forEach(el => {
     el.onclick = () => {
@@ -479,6 +603,7 @@ function renderTeam() {
     el.onclick = () => {
       beginNewSetup();
       agents.splice(+el.dataset.i, 1);
+      agents = normalizeAgents(agents);
       renderTeam();
       saveSession();
     };
@@ -712,7 +837,7 @@ function loadSession() {
   } catch {
     return;
   }
-  agents = s.agents || [];
+  agents = normalizeAgents(s.agents);
   $('#scenario').value = s.scenario || '';
   $('#goal').value = s.goal || '';
   applyRunSettings(s.settings);
@@ -1058,7 +1183,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     agents.push({
       name: name.replace(/[^a-zA-Z0-9_]/g, '_'),
       system: $('#bot-description').value,
-      temperature: 0.3
+      temperature: 0.3,
+      tools_enabled: true,
+      relationships: []
     });
 
     $('#bot-title').value = '';
@@ -1083,13 +1210,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         body: JSON.stringify({
           scenario,
           model: $('#model').value,
-          num_agents: parseInt($('#num-agents').value, 10)
+          num_agents: parseInt($('#num-agents').value, 10),
+          conversation_mode: $('#conversation-mode').value
         })
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.user_message || d.error || 'Generation failed');
 
-      agents = d.agents || [];
+      agents = normalizeAgents(d.agents);
       if (d.goal) $('#goal').value = d.goal;
       renderTeam();
       saveSession();
@@ -1136,7 +1264,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const item = normalizeSavedArtifact(file, raw);
       const d = item.payload;
       beginNewSetup();
-      agents = d.agents || [];
+      agents = normalizeAgents(d.agents);
       if (item.artifactType === 'scenario') {
         $('#scenario').value = d.scenario || '';
         $('#goal').value = d.goal || '';

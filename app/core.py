@@ -207,6 +207,36 @@ def _specialist_coordination_prompt(human_proxy_mode: str, conversation_mode: st
     )
 
 
+def _relationship_prompt(agent_cfg: Dict[str, Any]) -> str:
+    relationships = agent_cfg.get("relationships") or []
+    lines = []
+    for relationship in relationships:
+        if not isinstance(relationship, dict):
+            continue
+        target = str(relationship.get("target") or "").strip()
+        relation = str(relationship.get("relation") or "").strip()
+        notes = str(relationship.get("notes") or "").strip()
+        if not target or not relation or target == agent_cfg.get("name"):
+            continue
+        line = f"- You are {relation} to {target}."
+        if notes:
+            line += f" {notes}"
+        lines.append(line)
+    if not lines:
+        return ""
+    return (
+        "\n\nKnown relationships:\n"
+        + "\n".join(lines)
+        + "\n\nUse your relationships to guide tone, trust, disagreement, loyalty, and information sharing. "
+        "Do not mention relationship metadata directly unless it naturally fits the conversation. "
+        "Relationships should influence behavior, not dominate every response."
+    )
+
+
+def _agent_tools_enabled(agent_cfg: Dict[str, Any], global_allow_tools: bool) -> bool:
+    return global_allow_tools and bool(agent_cfg.get("tools_enabled", True))
+
+
 def _message_requests_agent(
     messages: Sequence[BaseAgentEvent | BaseChatMessage],
     request_marker: str,
@@ -466,13 +496,14 @@ async def run_orchestrator(
                 "model_client": gemini_client,
                 "system_message": (
                     agent_cfg.get("system", "You are a helpful assistant.")
+                    + _relationship_prompt(agent_cfg)
                     + _specialist_coordination_prompt(human_proxy_mode, conversation_mode)
                     + TOOL_REFLECTION_GUIDANCE
                 ),
                 "model_client_stream": False,
                 "reflect_on_tool_use": True,
             }
-            if supports_tools and allow_tools:
+            if supports_tools and _agent_tools_enabled(agent_cfg, allow_tools):
                 agent_kwargs["tools"] = list(TOOLS.values())
 
             agent = AssistantAgent(**agent_kwargs)

@@ -12,6 +12,8 @@ class AgentConfig(BaseModel):
     name: str = Field(..., description="A short, descriptive name for the agent (e.g., 'Programmer', 'President_A'). Use only letters, numbers, and underscores.")
     system: str = Field(..., description="A detailed system message that defines the agent's role, personality, and capabilities.")
     temperature: float = Field(default=0.3, description="The temperature setting for the agent's responses.")
+    tools_enabled: bool = Field(default=True, description="Whether this agent needs access to external tools.")
+    relationships: List[Dict[str, str]] = Field(default_factory=list, description="Social relationships to other generated agents.")
 
 class AgentList(BaseModel):
     agents: List[AgentConfig]
@@ -31,8 +33,10 @@ def _strip_json_fence(content: str) -> str:
 def _normalize_agent_names(agents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     used_names = set()
     normalized_agents = []
+    original_to_normalized = {}
     for index, agent in enumerate(agents, start=1):
-        name = re.sub(r"\W+", "_", str(agent.get("name", "")), flags=re.ASCII).strip("_")
+        original_name = str(agent.get("name", ""))
+        name = re.sub(r"\W+", "_", original_name, flags=re.ASCII).strip("_")
         if not name or name[0].isdigit() or keyword.iskeyword(name):
             name = f"Agent_{index}_{name}" if name else f"Agent_{index}"
         candidate = name
@@ -41,11 +45,37 @@ def _normalize_agent_names(agents: List[Dict[str, Any]]) -> List[Dict[str, Any]]
             candidate = f"{name}_{suffix}"
             suffix += 1
         used_names.add(candidate)
-        normalized_agents.append({**agent, "name": candidate})
+        original_to_normalized[original_name] = candidate
+        normalized_agents.append(
+            {
+                **agent,
+                "name": candidate,
+                "tools_enabled": bool(agent.get("tools_enabled", True)),
+                "relationships": list(agent.get("relationships") or []),
+            }
+        )
+    valid_names = {agent["name"] for agent in normalized_agents}
+    for agent in normalized_agents:
+        relationships = []
+        for relationship in agent["relationships"]:
+            if not isinstance(relationship, dict):
+                continue
+            target = original_to_normalized.get(str(relationship.get("target", "")), str(relationship.get("target", "")))
+            relation = str(relationship.get("relation", "")).strip()
+            notes = str(relationship.get("notes", "")).strip()
+            if not target or target == agent["name"] or target not in valid_names or not relation:
+                continue
+            relationships.append({"target": target, "relation": relation, "notes": notes})
+        agent["relationships"] = relationships
     return normalized_agents
 
 
-async def generate_agents_from_scenario(scenario: str, model: str, num_agents: int = 3) -> List[Dict[str, Any]]:
+async def generate_agents_from_scenario(
+    scenario: str,
+    model: str,
+    num_agents: int = 3,
+    conversation_mode: str = "discussion",
+) -> List[Dict[str, Any]]:
     """
     Generates a list of agents from a scenario description using an LLM
     with structured output (JSON schema).
@@ -62,14 +92,29 @@ You are an expert agent creator.
 Your task is to generate a list of {num_agents} agents that would be suitable for the following scenario:
 "{scenario}"
 
+The selected conversation mode is: "{conversation_mode}".
+
 The agents should have diverse roles and capabilities to effectively collaborate on the scenario.
+For each agent, decide whether tools should be enabled. In simulation or storybook scenarios, default
+tools_enabled to false unless the agent specifically needs tools. In execution or research-heavy scenarios,
+enable tools only for agents whose role requires research, file writing, coding, analysis, or concrete output
+generation. Relationships must only reference agents in this generated roster, must not target the same agent,
+and should be asymmetric where appropriate. Do not force every agent to have relationships.
 You MUST output ONLY a valid JSON object representing the agents. Follow this exact structure:
 {{
   "agents": [
     {{
       "name": "Programmer_Bob",
       "system": "You are a skilled programmer...",
-      "temperature": 0.3
+      "temperature": 0.3,
+      "tools_enabled": true,
+      "relationships": [
+        {{
+          "target": "Designer_Ava",
+          "relation": "Coworker",
+          "notes": "You value Ava's product judgment."
+        }}
+      ]
     }}
   ]
 }}

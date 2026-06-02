@@ -113,7 +113,7 @@ async def test_scenario_generate_success(client):
         data = await resp.get_json()
         assert data.get("agents") == [{"name": "Agent1"}]
         assert data.get("goal") == "Suggested Goal"
-        mock_generate.assert_called_once_with("create a website", "gemini-pro", 2)
+        mock_generate.assert_called_once_with("create a website", "gemini-pro", 2, "discussion")
 
 
 async def test_scenario_generate_retries_transient_provider_error(client):

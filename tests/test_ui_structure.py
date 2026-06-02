@@ -80,3 +80,14 @@ def test_stream_errors_reconnect_to_active_run():
     assert "conversation_mode: $('#conversation-mode').value" in script
     assert "function normalizeConversationMode(mode)" in script
     assert "$('#conversation-mode').addEventListener('change'" in script
+    assert "const RELATIONSHIP_TYPES = [" in script
+    assert "function normalizeAgents(rawAgents = [])" in script
+    assert "tools_enabled: agent?.tools_enabled !== false" in script
+    assert "class='relationships-panel'" in script
+    assert "class='btn btn-neutral relationship-add'" in script
+    assert "class='relationship-custom ${custom ? '' : 'hidden'}'" in script
+    assert "class='agent-tools'" in script
+    assert "relationships.splice(+el.dataset.r, 1)" in script
+    assert "$$('.relationship-custom').forEach(el => {" in script
+    assert "el.oninput = () => {" in script
+    assert "conversation_mode: $('#conversation-mode').value" in script

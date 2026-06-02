@@ -32,6 +32,29 @@ def test_normalize_agent_names_produces_unique_python_identifiers():
         "Agent_3_123_Critic",
     ]
     assert all(agent["name"].isidentifier() for agent in agents)
+    assert all(agent["relationships"] == [] for agent in agents)
+    assert all(agent["tools_enabled"] is True for agent in agents)
+
+
+def test_normalize_agent_names_filters_relationships_and_renames_valid_targets():
+    agents = _normalize_agent_names(
+        [
+            {
+                "name": "Captain Mara",
+                "relationships": [
+                    {"target": "Engineer Tomas", "relation": "Boss", "notes": "Keep the ship alive."},
+                    {"target": "Captain Mara", "relation": "Trusted", "notes": "Invalid self reference."},
+                    {"target": "Missing", "relation": "Enemy", "notes": "Invalid missing reference."},
+                ],
+            },
+            {"name": "Engineer Tomas", "tools_enabled": False},
+        ]
+    )
+
+    assert agents[0]["relationships"] == [
+        {"target": "Engineer_Tomas", "relation": "Boss", "notes": "Keep the ship alive."}
+    ]
+    assert agents[1]["tools_enabled"] is False
 
 
 @pytest.mark.asyncio
@@ -47,5 +70,38 @@ async def test_generate_agents_extracts_goal_from_fenced_json():
     with mock.patch("app.scenario.get_model_client", return_value=client):
         agents, goal = await generate_agents_from_scenario("Emergency landing", "gemini-test", 1)
 
-    assert agents == [{"name": "Pilot", "system": "Lead the crew.", "temperature": 0.3}]
+    assert agents == [
+        {
+            "name": "Pilot",
+            "system": "Lead the crew.",
+            "temperature": 0.3,
+            "tools_enabled": True,
+            "relationships": [],
+        }
+    ]
     assert goal == "Land safely."
+
+
+@pytest.mark.asyncio
+async def test_generate_agents_keeps_valid_relationships_and_tool_permissions():
+    client = mock.AsyncMock()
+    client.create.side_effect = [
+        SimpleNamespace(
+            content=(
+                '{"agents":['
+                '{"name":"Captain","system":"Lead.","temperature":0.4,"tools_enabled":false,'
+                '"relationships":[{"target":"Engineer","relation":"Boss","notes":"Trust their judgment."}]},'
+                '{"name":"Engineer","system":"Repair.","temperature":0.2,"tools_enabled":true,'
+                '"relationships":[{"target":"Captain","relation":"Employee","notes":""}]}]}'
+            )
+        ),
+        SimpleNamespace(content='{"goal":"Repair the ship."}'),
+    ]
+
+    with mock.patch("app.scenario.get_model_client", return_value=client):
+        agents, goal = await generate_agents_from_scenario("Damaged starship", "gemini-test", 2)
+
+    assert agents[0]["tools_enabled"] is False
+    assert agents[0]["relationships"][0]["target"] == "Engineer"
+    assert agents[1]["relationships"][0]["relation"] == "Employee"
+    assert goal == "Repair the ship."
