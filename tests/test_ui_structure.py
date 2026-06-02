@@ -1,5 +1,6 @@
 
 import pytest
+from pathlib import Path
 from app.server import app
 
 @pytest.mark.asyncio
@@ -15,6 +16,7 @@ async def test_index_html_structure():
     assert 'class="chat-empty"' in html
     assert 'id="empty-open-setup"' in html
     assert 'id="stop-run"' in html
+    assert 'id="resume-run"' in html
     assert 'id="jump-latest"' in html
     assert 'id="work"' in html
 
@@ -26,7 +28,50 @@ async def test_index_html_structure():
     assert 'Consult me' in html
     assert 'Delegate routine' in html
     assert 'Workspace autonomy' in html
+    assert '<option value="smart_supervisor">Smart Supervisor</option>' in html
+    assert '<option value="round_robin">Round Robin</option>' in html
+    assert 'Conversation Mode' in html
+    assert 'Conversation Orchestration' in html
+    assert '<option value="discussion">Discussion</option>' in html
+    assert '<option value="debate">Debate</option>' in html
+    assert '<option value="brainstorm">Brainstorm</option>' in html
+    assert '<option value="execution">Execution</option>' in html
+    assert '<option value="simulation">Simulation</option>' in html
+    assert '<option value="storybook">Storybook</option>' in html
+    assert 'id="sessions-modal"' in html
+    assert 'Scenarios and Groups' in html
+    assert 'id="scenario-save"' in html
+    assert 'id="group-save"' in html
 
     # Check that Ollama settings are gone
     assert 'Ollama Base URL' not in html
     assert 'Probe Ollama' not in html
+
+
+def test_stream_errors_reconnect_to_active_run():
+    script = Path("static/js/main.js").read_text(encoding="utf-8")
+    assert "function createRunToken()" in script
+    assert "typeof globalThis.crypto?.randomUUID === 'function'" in script
+    assert "run_token: createRunToken()" in script
+    assert "localStorage.setItem(ACTIVE_RUN_URL_KEY, url)" in script
+    assert "async function reconnectActiveRun()" in script
+    assert "async function resumeSimulation()" in script
+    assert "/api/run/resume" in script
+    assert "Simulation paused" in script
+    assert "/api/run/status?run_token=" in script
+    assert "localStorage.removeItem(ACTIVE_RUN_URL_KEY)" in script
+    assert "es.close();\n        localStorage.removeItem(ACTIVE_RUN_URL_KEY);" in script
+    assert "reconnectUrl.searchParams.set('resume_only', 'true')" in script
+    assert "setStatus('reconnecting')" in script
+    assert "Supervisor choosing next speaker..." in script
+    assert "function normalizeManagerMode(mode)" in script
+    assert "normalized === 'auto' || normalized === 'smartsupervisor'" in script
+    assert "async function saveLibraryItem(artifactType)" in script
+    assert "function normalizeSavedArtifact(file, payload)" in script
+    assert "item.artifactType === 'scenario'" in script
+    assert "Agent group loaded. Current task preserved." in script
+    assert "$('#scenario').addEventListener('change', saveSession)" in script
+    assert "loadSession();" in script
+    assert "conversation_mode: $('#conversation-mode').value" in script
+    assert "function normalizeConversationMode(mode)" in script
+    assert "$('#conversation-mode').addEventListener('change'" in script

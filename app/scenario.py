@@ -1,4 +1,6 @@
 import json
+import keyword
+import re
 from typing import Any, Dict, List
 from pydantic import BaseModel, Field
 from autogen_core.models import UserMessage
@@ -24,6 +26,23 @@ def _strip_json_fence(content: str) -> str:
         if text.endswith("```"):
             text = text[:-3]
     return text.strip()
+
+
+def _normalize_agent_names(agents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    used_names = set()
+    normalized_agents = []
+    for index, agent in enumerate(agents, start=1):
+        name = re.sub(r"\W+", "_", str(agent.get("name", "")), flags=re.ASCII).strip("_")
+        if not name or name[0].isdigit() or keyword.iskeyword(name):
+            name = f"Agent_{index}_{name}" if name else f"Agent_{index}"
+        candidate = name
+        suffix = 2
+        while candidate in used_names:
+            candidate = f"{name}_{suffix}"
+            suffix += 1
+        used_names.add(candidate)
+        normalized_agents.append({**agent, "name": candidate})
+    return normalized_agents
 
 
 async def generate_agents_from_scenario(scenario: str, model: str, num_agents: int = 3) -> List[Dict[str, Any]]:
@@ -76,7 +95,7 @@ Do NOT output the JSON schema. Output the actual instantiated agents!
 
 
     # Convert the Pydantic models back to dictionaries for the rest of the app
-    agents = [agent.model_dump() for agent in agent_list_obj.agents]
+    agents = _normalize_agent_names([agent.model_dump() for agent in agent_list_obj.agents])
 
     # Now, make a second call to generate a team goal
     goal_prompt = f"""

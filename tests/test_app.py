@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.server import _run_orchestrator_thread, app
-from app.state import state
+from app.state import ReplayEventBuffer, state
 from app.core import OrchestratorError, run_orchestrator
 from app.config import MAX_UPLOAD_BYTES, ALLOWED_UPLOAD_MIMES, SESSIONS_DIR, WORKSPACE_DIR
 import os
@@ -114,6 +114,46 @@ async def test_scenario_generate_success(client):
         assert data.get("agents") == [{"name": "Agent1"}]
         assert data.get("goal") == "Suggested Goal"
         mock_generate.assert_called_once_with("create a website", "gemini-pro", 2)
+
+
+async def test_scenario_generate_retries_transient_provider_error(client):
+    with (
+        mock.patch('app.server.generate_agents_from_scenario') as mock_generate,
+        mock.patch('app.server.asyncio.sleep', new=mock.AsyncMock()) as mock_sleep,
+    ):
+        mock_generate.side_effect = [
+            RuntimeError("503 UNAVAILABLE: model is experiencing high demand"),
+            ([{"name": "Agent1"}], "Suggested Goal"),
+        ]
+        resp = await client.post("/api/scenario/generate", json={
+            "scenario": "create a website",
+            "model": "gemini-pro",
+            "num_agents": 1,
+        })
+
+    assert resp.status_code == 200
+    assert (await resp.get_json())["goal"] == "Suggested Goal"
+    assert mock_generate.await_count == 2
+    mock_sleep.assert_awaited_once()
+
+
+async def test_scenario_generate_reports_exhausted_transient_provider_error(client):
+    with (
+        mock.patch('app.server.generate_agents_from_scenario') as mock_generate,
+        mock.patch('app.server.asyncio.sleep', new=mock.AsyncMock()),
+    ):
+        mock_generate.side_effect = RuntimeError("503 UNAVAILABLE: model is experiencing high demand")
+        resp = await client.post("/api/scenario/generate", json={
+            "scenario": "create a website",
+            "model": "gemini-pro",
+            "num_agents": 1,
+        })
+
+    assert resp.status_code == 503
+    payload = await resp.get_json()
+    assert payload["error_code"] == "model_temporarily_unavailable"
+    assert mock_generate.await_count == 3
+
 
 async def test_scenario_generate_orchestrator_error(client):
     with mock.patch('app.server.generate_agents_from_scenario') as mock_generate:
@@ -258,6 +298,135 @@ async def test_run_orchestrator_thread_unexpected_error(client):
         assert payload.get("error_code") == "orchestrator_error"
         assert "unexpected error" in payload.get("user_message").lower()
         assert q.get_nowait() == "[DONE]"
+
+
+async def test_run_orchestrator_thread_forwards_conversation_mode(client):
+    q = queue.Queue()
+    with (
+        mock.patch("app.server.run_orchestrator", return_value="orchestrator-call") as mock_run,
+        mock.patch("app.server.asyncio.run") as mock_asyncio_run,
+    ):
+        _run_orchestrator_thread("", "", [], "auto", q, 1, "off", "", 0.3, True, "execution")
+
+    assert mock_run.call_args.args[-1] == "execution"
+    mock_asyncio_run.assert_called_once()
+    mock_asyncio_run.call_args.args[0].close()
+
+
+async def test_stream_rejects_second_connection_while_run_is_active(client):
+    with mock.patch("app.server.state.start", side_effect=RuntimeError("already active")):
+        resp = await client.get("/stream?run_token=reconnect-token")
+
+    assert resp.status_code == 409
+    payload = await resp.get_json()
+    assert payload["error_code"] == "run_already_active"
+
+
+async def test_stream_reconnect_replays_buffer_without_starting_new_run(client):
+    buffer = ReplayEventBuffer()
+    buffer.put(json.dumps({"type": "chat", "sender": "Agent", "message": "missed update"}))
+    buffer.put("[DONE]")
+    with (
+        mock.patch("app.server.state.reconnect_buffer", return_value=buffer),
+        mock.patch("app.server.state.start") as mock_start,
+    ):
+        resp = await client.get("/stream?run_token=active-token")
+
+    assert resp.status_code == 200
+    content = (await resp.get_data()).decode("utf-8")
+    assert "id: 1" in content
+    assert "missed update" in content
+    assert "id: 2" in content
+    assert "[DONE]" in content
+    mock_start.assert_not_called()
+
+
+async def test_stream_reconnect_resumes_after_last_event_id(client):
+    buffer = ReplayEventBuffer()
+    buffer.put(json.dumps({"type": "chat", "sender": "Agent", "message": "already seen"}))
+    buffer.put(json.dumps({"type": "chat", "sender": "Agent", "message": "missed update"}))
+    buffer.put("[DONE]")
+    with mock.patch("app.server.state.reconnect_buffer", return_value=buffer):
+        resp = await client.get(
+            "/stream?run_token=active-token",
+            headers={"Last-Event-ID": "1"},
+        )
+
+    content = (await resp.get_data()).decode("utf-8")
+    assert "already seen" not in content
+    assert "id: 2" in content
+    assert "missed update" in content
+    assert "id: 3" in content
+    assert "[DONE]" in content
+
+
+async def test_stream_resume_only_does_not_start_missing_run(client):
+    with mock.patch("app.server.state.start") as mock_start:
+        resp = await client.get("/stream?run_token=stale-token&resume_only=true")
+
+    assert resp.status_code == 404
+    payload = await resp.get_json()
+    assert payload["error_code"] == "run_not_found"
+    mock_start.assert_not_called()
+
+
+async def test_run_status_reports_buffer_availability(client):
+    buffer = ReplayEventBuffer()
+    with mock.patch("app.server.state.reconnect_buffer", return_value=buffer):
+        resp = await client.get("/api/run/status?run_token=active-token")
+
+    assert resp.status_code == 200
+    assert (await resp.get_json())["available"] is True
+
+
+async def test_resume_run_restarts_stopped_simulation_with_transcript(client):
+    buffer = ReplayEventBuffer()
+    buffer.put(json.dumps({"type": "chat", "sender": "Researcher", "message": "Found the water source."}))
+    previous_args = ("Find water.", "model", [], "round_robin", buffer, 5, "off", "", 0.3, False, "simulation")
+    with (
+        mock.patch(
+            "app.server.state.prepare_resume",
+            return_value=(mock.sentinel.target, previous_args, buffer, "Researcher: Found the water source."),
+        ),
+        mock.patch("app.server.state.start") as mock_start,
+    ):
+        resp = await client.post("/api/run/resume", json={"run_token": "stopped-token"})
+
+    assert resp.status_code == 200
+    resumed_args = mock_start.call_args.args[1]
+    assert "Resume the existing simulation" in resumed_args[0]
+    assert "Researcher: Found the water source." in resumed_args[0]
+    assert resumed_args[4] is buffer
+    assert any("Simulation resumed." in item for _, item in buffer.read_after(0, timeout=0))
+
+
+async def test_resume_run_rejects_missing_stopped_simulation(client):
+    with mock.patch("app.server.state.prepare_resume", side_effect=RuntimeError("missing")):
+        resp = await client.post("/api/run/resume", json={"run_token": "missing-token"})
+
+    assert resp.status_code == 409
+    assert (await resp.get_json())["error_code"] == "run_not_resumable"
+
+
+def test_replay_event_buffer_reads_only_events_after_cursor():
+    buffer = ReplayEventBuffer()
+    buffer.put("first")
+    buffer.put("second")
+    assert buffer.read_after(0, timeout=0) == [(1, "first"), (2, "second")]
+    assert buffer.read_after(1, timeout=0) == [(2, "second")]
+
+
+def test_replay_event_buffer_copies_transcript_without_done_marker():
+    buffer = ReplayEventBuffer()
+    buffer.put(json.dumps({"type": "chat", "sender": "Agent", "message": "Continue from here."}))
+    buffer.put("[DONE]")
+    copy = buffer.copy_without_done()
+
+    assert copy.read_after(0, timeout=0) == [
+        (1, json.dumps({"type": "chat", "sender": "Agent", "message": "Continue from here."}))
+    ]
+    assert buffer.chat_transcript() == "Agent: Continue from here."
+
 
 # --- New tests for /api/workspace/upload ---
 
@@ -703,6 +872,35 @@ async def test_sessions_save_success(client):
     data = await resp.get_json()
     assert data.get("ok") is True
     assert os.path.exists(os.path.join(SESSIONS_DIR, f"{session_name}.json"))
+
+async def test_sessions_save_typed_artifacts_do_not_overwrite_each_other(client):
+    shared_name = "support_team"
+    scenario = {
+        "name": shared_name,
+        "artifact_type": "scenario",
+        "scenario": "Handle a billing escalation.",
+        "goal": "Resolve the billing issue.",
+        "agents": [{"name": "BillingLead"}],
+    }
+    group = {
+        "name": shared_name,
+        "artifact_type": "group",
+        "agents": [{"name": "BillingLead"}],
+    }
+
+    scenario_resp = await client.post("/api/sessions", json=scenario)
+    group_resp = await client.post("/api/sessions", json=group)
+
+    assert scenario_resp.status_code == 201
+    assert group_resp.status_code == 201
+    assert os.path.exists(os.path.join(SESSIONS_DIR, "scenario_support_team.json"))
+    assert os.path.exists(os.path.join(SESSIONS_DIR, "group_support_team.json"))
+
+async def test_sessions_save_rejects_invalid_artifact_type(client):
+    resp = await client.post("/api/sessions", json={"name": "bad", "artifact_type": "unknown"})
+    assert resp.status_code == 400
+    data = await resp.get_json()
+    assert data.get("error_code") == "invalid_artifact_type"
 
 # --- New tests for /api/sessions/<path:name> (DELETE) ---
 

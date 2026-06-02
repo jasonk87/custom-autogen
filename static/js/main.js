@@ -5,13 +5,22 @@ let agents = [];
 let streams = {};
 let es = null;
 let runActive = false;
+let runCanResume = false;
 let currentStatus = 'idle';
 const think = { active: false, buffer: '', open: false, minimized: false };
 const playgroundState = { toolNames: [] };
 const SESSION_KEY = 'agentStudioSession';
+const ACTIVE_RUN_URL_KEY = 'agentStudioActiveRunUrl';
 const MODEL_DEFAULT_VERSION_KEY = 'agentStudioModelDefaultVersion';
 const MODEL_DEFAULT_VERSION = 'gemini-2.5-flash-lite-max-thinking-v1';
 const PREFERRED_MODEL = 'gemini::cloud::gemini-2.5-flash-lite';
+
+function createRunToken() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+  return `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -217,6 +226,33 @@ function humanProxyMode() {
   return $('input[name="human-proxy-mode"]:checked')?.value || 'consult';
 }
 
+function normalizeManagerMode(mode) {
+  const normalized = String(mode || '').toLowerCase().replace(/[\s_-]/g, '');
+  if (normalized === 'auto' || normalized === 'smartsupervisor') return 'smart_supervisor';
+  if (normalized === 'roundrobin') return 'round_robin';
+  if (normalized === 'manual') return 'manual';
+  return 'smart_supervisor';
+}
+
+function normalizeConversationMode(mode) {
+  const normalized = String(mode || 'discussion').toLowerCase();
+  return ['discussion', 'debate', 'brainstorm', 'execution', 'simulation', 'storybook'].includes(normalized)
+    ? normalized
+    : 'discussion';
+}
+
+function updateConversationModeHint() {
+  const hints = {
+    discussion: 'Natural multi-agent conversation for exploring a topic.',
+    debate: 'Pressure-test ideas with challenges, counterarguments, and productive disagreement.',
+    brainstorm: 'Generate many diverse ideas before spending time on criticism.',
+    execution: 'Focus on concrete deliverables, tool use, and completing the work.',
+    simulation: 'Stay immersed in the scenario and act as real participants.',
+    storybook: 'Advance an engaging narrative with continuity, character, and drama.'
+  };
+  $('#conversation-mode-hint').textContent = hints[normalizeConversationMode($('#conversation-mode').value)];
+}
+
 function setHumanProxyMode(mode) {
   const input = $(`input[name="human-proxy-mode"][value="${mode || 'consult'}"]`);
   if (input) input.checked = true;
@@ -257,12 +293,14 @@ function setStatus(state) {
   if (!status) return;
   const map = {
     idle: 'Status: Idle',
+    paused: 'Status: Simulation paused',
     running: 'Status: Agents working...',
+    supervising: 'Status: Supervisor choosing next speaker...',
     waiting_for_input: 'Status: Waiting for input...',
     waiting_for_manual_selection: 'Status: Waiting for speaker selection...'
   };
   status.textContent = map[state] || 'Status';
-  status.classList.toggle('pulse', state === 'running');
+  status.classList.toggle('pulse', ['running', 'supervising'].includes(state));
 
   const fb = $('#fb');
   const send = $('#send');
@@ -444,59 +482,79 @@ function renderTeam() {
   });
 }
 
-function buttons(running) {
+function buttons(running, resumable = false) {
   const actions = $('#actions');
   if (!actions) return;
 
   if (running) {
     actions.innerHTML = "<button id='stop' class='btn btn-danger' style='width:100%'>Stop Task</button>";
     $('#stop').onclick = stopSimulation;
+  } else if (resumable) {
+    actions.innerHTML = "<button id='resume' class='btn btn-success' style='width:100%'>Resume Task</button>";
+    $('#resume').onclick = resumeSimulation;
   } else {
     actions.innerHTML = "<button id='start' class='btn btn-primary' style='width:100%'>Start Task</button>";
     $('#start').onclick = startRun;
   }
   $('#stop-run')?.classList.toggle('hidden', !running);
+  $('#resume-run')?.classList.toggle('hidden', !resumable || running);
 }
 
 async function stopSimulation() {
   if (es) es.close();
   await fetch('/stop', { method: 'POST' });
   runActive = false;
-  setStatus('idle');
-  buttons(false);
+  runCanResume = true;
+  setStatus('paused');
+  buttons(false, true);
   closeThinkDock();
 }
 
-async function startRun() {
-  if (agents.length < 2) {
-    toast('Add at least two agents.');
+async function resumeSimulation() {
+  const url = localStorage.getItem(ACTIVE_RUN_URL_KEY);
+  if (!url) {
+    runCanResume = false;
+    setStatus('idle');
+    buttons(false);
+    toast('No stopped simulation is available to resume.');
     return;
   }
-
+  const reconnectUrl = new URL(url, window.location.origin);
+  const runToken = reconnectUrl.searchParams.get('run_token');
+  const response = await fetch('/api/run/resume', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ run_token: runToken })
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    toast(payload.user_message || 'The simulation is still stopping. Try resume again shortly.');
+    return;
+  }
   $('#chat').innerHTML = '';
+  runCanResume = false;
+  reconnectUrl.searchParams.set('resume_only', 'true');
+  connectRunStream(`${reconnectUrl.pathname}?${reconnectUrl.searchParams.toString()}`);
+}
+
+function connectRunStream(url) {
+  if (es) es.close();
   runActive = true;
   setStatus('running');
   buttons(true);
-
-  const params = new URLSearchParams({
-    model: $('#model').value,
-    goal: btoa($('#goal').value || ''),
-    agents: btoa(JSON.stringify(agents)),
-    manager_mode: $('#mode').value,
-    turns: $('#turns').value,
-    temperature: $('#temperature').value,
-    allow_tools: $('#allow-tools').checked,
-    human_proxy_mode: humanProxyMode(),
-    human_proxy_preferences: $('#human-proxy-preferences').value
-  });
-
-  es = new EventSource(`/stream?${params.toString()}`);
+  es = new EventSource(url);
   es.onmessage = ev => {
     if (ev.data === '[DONE]') {
       es.close();
       runActive = false;
-      setStatus('idle');
-      buttons(false);
+      if (runCanResume) {
+        setStatus('paused');
+        buttons(false, true);
+      } else {
+        localStorage.removeItem(ACTIVE_RUN_URL_KEY);
+        setStatus('idle');
+        buttons(false);
+      }
       return;
     }
 
@@ -507,6 +565,7 @@ async function startRun() {
         toast(`Error: ${errMsg}`);
         addMsg('System', `**Error:** ${errMsg}`);
         es.close();
+        localStorage.removeItem(ACTIVE_RUN_URL_KEY);
         runActive = false;
         setStatus('idle');
         buttons(false);
@@ -524,16 +583,52 @@ async function startRun() {
   };
   es.onerror = () => {
     if (!runActive) return;
-    if (!es || es.readyState === EventSource.CLOSED) {
-      runActive = false;
-      setStatus('idle');
-      buttons(false);
-      toast('Stream closed.');
-      return;
-    }
-    // Ignore transient EventSource reconnect events while run is still active.
-    setStatus('running');
+    setStatus('reconnecting');
   };
+}
+
+async function startRun() {
+  if (agents.length < 2) {
+    toast('Add at least two agents.');
+    return;
+  }
+
+  $('#chat').innerHTML = '';
+  runCanResume = false;
+  const params = new URLSearchParams({
+    model: $('#model').value,
+    goal: btoa($('#goal').value || ''),
+    agents: btoa(JSON.stringify(agents)),
+    manager_mode: $('#mode').value,
+    conversation_mode: $('#conversation-mode').value,
+    turns: $('#turns').value,
+    temperature: $('#temperature').value,
+    allow_tools: $('#allow-tools').checked,
+    human_proxy_mode: humanProxyMode(),
+    human_proxy_preferences: $('#human-proxy-preferences').value,
+    run_token: createRunToken()
+  });
+  const url = `/stream?${params.toString()}`;
+  localStorage.setItem(ACTIVE_RUN_URL_KEY, url);
+  connectRunStream(url);
+}
+
+async function reconnectActiveRun() {
+  const url = localStorage.getItem(ACTIVE_RUN_URL_KEY);
+  if (!url) return false;
+  $('#chat').innerHTML = '';
+  const reconnectUrl = new URL(url, window.location.origin);
+  const runToken = reconnectUrl.searchParams.get('run_token');
+  const statusResponse = await fetch(`/api/run/status?run_token=${encodeURIComponent(runToken || '')}`);
+  const status = await statusResponse.json();
+  if (!status.available) {
+    localStorage.removeItem(ACTIVE_RUN_URL_KEY);
+    return false;
+  }
+  runCanResume = Boolean(status.resumable);
+  reconnectUrl.searchParams.set('resume_only', 'true');
+  connectRunStream(`${reconnectUrl.pathname}?${reconnectUrl.searchParams.toString()}`);
+  return true;
 }
 
 async function showConfirm({ title, message, okText }) {
@@ -551,35 +646,54 @@ async function showConfirm({ title, message, okText }) {
 
 function saveSession() {
   const s = {
+    scenario: $('#scenario').value,
     goal: $('#goal').value,
     agents,
-    settings: {
-      model: $('#model').value,
-      mode: $('#mode').value,
-      turns: $('#turns').value,
-      temperature: $('#temperature').value,
-      allow_tools: $('#allow-tools').checked,
-      human_proxy_mode: humanProxyMode(),
-      human_proxy_preferences: $('#human-proxy-preferences').value
-    }
+    settings: currentRunSettings()
   };
   localStorage.setItem(SESSION_KEY, JSON.stringify(s));
+}
+
+function currentRunSettings() {
+  return {
+    model: $('#model').value,
+    mode: $('#mode').value,
+    conversation_mode: $('#conversation-mode').value,
+    turns: $('#turns').value,
+    temperature: $('#temperature').value,
+    allow_tools: $('#allow-tools').checked,
+    human_proxy_mode: humanProxyMode(),
+    human_proxy_preferences: $('#human-proxy-preferences').value
+  };
+}
+
+function applyRunSettings(settings = {}) {
+  if (settings.model) $('#model').value = settings.model;
+  if (settings.mode) $('#mode').value = normalizeManagerMode(settings.mode);
+  $('#conversation-mode').value = normalizeConversationMode(settings.conversation_mode);
+  if (settings.turns) $('#turns').value = settings.turns;
+  if (settings.temperature) $('#temperature').value = settings.temperature;
+  if (settings.allow_tools !== undefined) $('#allow-tools').checked = settings.allow_tools;
+  setHumanProxyMode(settings.human_proxy_mode);
+  updateConversationModeHint();
+  if (settings.human_proxy_preferences !== undefined) {
+    $('#human-proxy-preferences').value = settings.human_proxy_preferences;
+  }
 }
 
 function loadSession() {
   const raw = localStorage.getItem(SESSION_KEY);
   if (!raw) return;
-  const s = JSON.parse(raw);
-  agents = s.agents || [];
-  if (s.goal) $('#goal').value = s.goal;
-  if (s.settings) {
-    if (s.settings.mode) $('#mode').value = s.settings.mode;
-    if (s.settings.turns) $('#turns').value = s.settings.turns;
-    if (s.settings.temperature) $('#temperature').value = s.settings.temperature;
-    if (s.settings.allow_tools !== undefined) $('#allow-tools').checked = s.settings.allow_tools;
-    setHumanProxyMode(s.settings.human_proxy_mode);
-    if (s.settings.human_proxy_preferences !== undefined) $('#human-proxy-preferences').value = s.settings.human_proxy_preferences;
+  let s;
+  try {
+    s = JSON.parse(raw);
+  } catch {
+    return;
   }
+  agents = s.agents || [];
+  $('#scenario').value = s.scenario || '';
+  $('#goal').value = s.goal || '';
+  applyRunSettings(s.settings);
 }
 
 function getSavedSettings() {
@@ -591,21 +705,6 @@ function getSavedSettings() {
   } catch {
     return {};
   }
-}
-
-function applySavedSettings() {
-  const settings = getSavedSettings();
-  if (settings.mode) $('#mode').value = settings.mode;
-  if (settings.turns) $('#turns').value = settings.turns;
-  if (settings.temperature) $('#temperature').value = settings.temperature;
-  if (settings.allow_tools !== undefined) $('#allow-tools').checked = settings.allow_tools;
-  setHumanProxyMode(settings.human_proxy_mode);
-  if (settings.human_proxy_preferences !== undefined) $('#human-proxy-preferences').value = settings.human_proxy_preferences;
-}
-
-function clearDraftKeepSettings() {
-  const settings = getSavedSettings();
-  localStorage.setItem(SESSION_KEY, JSON.stringify({ goal: '', agents: [], settings }));
 }
 
 async function loadModels() {
@@ -730,27 +829,27 @@ async function onTreeClick(e) {
   }
 }
 
-async function saveCurrentSessionToServer() {
+async function saveLibraryItem(artifactType) {
   const name = $('#session-name').value.trim();
   if (!name) {
-    toast('Enter a session name.');
+    toast('Enter a name for this saved item.');
+    return;
+  }
+  if (!agents.length) {
+    toast('Add at least one agent before saving.');
     return;
   }
 
   const payload = {
     name,
-    goal: $('#goal').value,
+    artifact_type: artifactType,
     agents,
-    settings: {
-      model: $('#model').value,
-      mode: $('#mode').value,
-      turns: $('#turns').value,
-      temperature: $('#temperature').value,
-      allow_tools: $('#allow-tools').checked,
-      human_proxy_mode: humanProxyMode(),
-      human_proxy_preferences: $('#human-proxy-preferences').value
-    }
   };
+  if (artifactType === 'scenario') {
+    payload.scenario = $('#scenario').value;
+    payload.goal = $('#goal').value;
+    payload.settings = currentRunSettings();
+  }
 
   const r = await fetch('/api/sessions', {
     method: 'POST',
@@ -759,27 +858,64 @@ async function saveCurrentSessionToServer() {
   });
 
   if (r.ok) {
-    toast('Session saved.');
+    toast(artifactType === 'group' ? 'Agent group saved.' : 'Scenario saved.');
     $('#session-name').value = '';
     await openSessionsModal();
   } else {
-    toast('Failed to save session.');
+    const d = await r.json().catch(() => ({}));
+    toast(d.user_message || 'Failed to save item.');
   }
+}
+
+function normalizeSavedArtifact(file, payload) {
+  const value = payload?.data && !payload.agents ? payload.data : payload;
+  const artifactType = value?.artifact_type === 'group' ? 'group' : 'scenario';
+  return {
+    file,
+    artifactType,
+    name: value?.name || file.replace(/\.json$/i, ''),
+    payload: value || {}
+  };
+}
+
+function renderSavedLibrary(items) {
+  const list = $('#sessions-list');
+  if (!items.length) {
+    list.innerHTML = "<div class='library-empty'>No saved scenarios or groups yet.</div>";
+    return;
+  }
+  list.innerHTML = items.map(item => {
+    const action = item.artifactType === 'group' ? 'Use Group' : 'Load Scenario';
+    return `
+      <div class='library-item'>
+        <div>
+          <div class='library-item-kind'>${escapeHtml(item.artifactType)}</div>
+          <div class='library-item-name'>${escapeHtml(item.name)}</div>
+        </div>
+        <div class='library-item-actions'>
+          <button class='btn btn-neutral session-load' data-file='${escapeHtml(item.file)}'>${action}</button>
+          <button class='btn btn-danger session-delete' data-file='${escapeHtml(item.file)}'>Delete</button>
+        </div>
+      </div>
+    `;
+  }).join('');
 }
 
 async function openSessionsModal() {
   $('#sessions-modal').style.display = 'flex';
   const r = await fetch('/api/sessions');
   const sessions = await r.json();
-  $('#sessions-list').innerHTML = sessions.map(s => `
-    <div style='padding:10px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between;'>
-      <span>${escapeHtml(s)}</span>
-      <div>
-        <button class='btn btn-neutral session-load' data-file='${escapeHtml(s)}'>Load</button>
-        <button class='btn btn-danger session-delete' data-file='${escapeHtml(s)}'>x</button>
-      </div>
-    </div>
-  `).join('');
+  if (!r.ok || !Array.isArray(sessions)) {
+    renderSavedLibrary([]);
+    toast(sessions.user_message || 'Failed to load saved library.');
+    return;
+  }
+  const items = await Promise.all(sessions.map(async file => {
+    const response = await fetch(`/api/sessions/${encodeURIComponent(file)}`);
+    const payload = await response.json();
+    return normalizeSavedArtifact(file, payload);
+  }));
+  renderSavedLibrary(items);
 }
 
 async function loadToolsForPlayground() {
@@ -960,33 +1096,36 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   $('#sessions').onclick = openSessionsModal;
   $('#sessions-close').onclick = () => { $('#sessions-modal').style.display = 'none'; };
-  $('#session-save').onclick = saveCurrentSessionToServer;
+  $('#scenario-save').onclick = () => saveLibraryItem('scenario');
+  $('#group-save').onclick = () => saveLibraryItem('group');
   $('#sessions-list').onclick = async (e) => {
     const file = e.target.dataset.file;
     if (!file) return;
 
     if (e.target.classList.contains('session-load')) {
-      const r = await fetch(`/api/sessions/${file}`);
-      const d = await r.json();
+      const r = await fetch(`/api/sessions/${encodeURIComponent(file)}`);
+      const raw = await r.json();
+      if (!r.ok) {
+        toast(raw.user_message || 'Failed to load saved item.');
+        return;
+      }
+      const item = normalizeSavedArtifact(file, raw);
+      const d = item.payload;
       agents = d.agents || [];
-      $('#goal').value = d.goal || '';
-      if (d.settings) {
-        if (d.settings.model) $('#model').value = d.settings.model;
-        if (d.settings.mode) $('#mode').value = d.settings.mode;
-        if (d.settings.turns) $('#turns').value = d.settings.turns;
-        if (d.settings.temperature) $('#temperature').value = d.settings.temperature;
-        if (d.settings.allow_tools !== undefined) $('#allow-tools').checked = d.settings.allow_tools;
-        setHumanProxyMode(d.settings.human_proxy_mode);
-        if (d.settings.human_proxy_preferences !== undefined) $('#human-proxy-preferences').value = d.settings.human_proxy_preferences;
+      if (item.artifactType === 'scenario') {
+        $('#scenario').value = d.scenario || '';
+        $('#goal').value = d.goal || '';
+        applyRunSettings(d.settings);
       }
       renderTeam();
       saveSession();
       $('#sessions-modal').style.display = 'none';
+      toast(item.artifactType === 'group' ? 'Agent group loaded. Current task preserved.' : 'Scenario loaded.');
     }
 
     if (e.target.classList.contains('session-delete')) {
       if (await showConfirm({ title: 'Delete Session', message: `Delete ${file}?`, okText: 'Delete' })) {
-        await fetch(`/api/sessions/${file}`, { method: 'DELETE' });
+        await fetch(`/api/sessions/${encodeURIComponent(file)}`, { method: 'DELETE' });
         await openSessionsModal();
       }
     }
@@ -1075,10 +1214,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('#thinkmin').onclick = toggleThinkMinimize;
   $('#thinkclose').onclick = closeThinkDock;
   $('#stop-run').onclick = stopSimulation;
+  $('#resume-run').onclick = resumeSimulation;
   $('#jump-latest').onclick = () => scrollChatToLatest($('#chat'));
 
+  $('#scenario').addEventListener('change', saveSession);
   $('#goal').addEventListener('change', saveSession);
   $('#mode').addEventListener('change', saveSession);
+  $('#conversation-mode').addEventListener('change', () => {
+    updateConversationModeHint();
+    saveSession();
+  });
   $('#turns').addEventListener('change', saveSession);
   $('#temperature').addEventListener('change', saveSession);
   $('#model').addEventListener('change', saveSession);
@@ -1109,12 +1254,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
   }
 
-  applySavedSettings();
-  clearDraftKeepSettings();
+  loadSession();
   await loadOllamaSettings();
   await loadModels();
   renderTeam();
   updateHumanProxyPreferencesVisibility();
-  setStatus('idle');
-  buttons(false);
+  updateConversationModeHint();
+  if (!await reconnectActiveRun()) {
+    setStatus('idle');
+    buttons(false);
+  }
 });

@@ -1173,6 +1173,108 @@ summary:hover {
   font-weight: 700;
 }
 
+.library-card {
+  width: min(92vw, 760px);
+  max-height: min(88vh, 760px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 24px;
+  background: var(--glass-solid);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  box-shadow: 0 40px 100px rgba(0, 0, 0, 0.6), 0 0 40px var(--primary-glow);
+}
+
+.library-header,
+.library-save-row,
+.library-item,
+.library-item-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.library-header {
+  justify-content: space-between;
+}
+
+.library-header h2 {
+  margin: 2px 0 4px;
+}
+
+.library-header p,
+.library-save small,
+.library-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.library-kicker,
+.library-item-kind {
+  color: var(--primary);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.library-save {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(2, 6, 23, 0.28);
+}
+
+.library-save label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.library-save-row input {
+  flex: 1;
+}
+
+.library-save small {
+  display: block;
+  margin-top: 8px;
+}
+
+.library-list {
+  overflow-y: auto;
+  min-height: 120px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.library-item {
+  justify-content: space-between;
+  padding: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.library-item:last-child {
+  border-bottom: 0;
+}
+
+.library-item-name {
+  margin-top: 3px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.library-empty {
+  padding: 20px;
+  text-align: center;
+}
+
 @keyframes fadeIn {
   from {
     opacity: 0;
@@ -1321,5 +1423,21 @@ summary:hover {
     min-height: 38px;
     min-width: 38px;
     padding: 8px;
+  }
+
+  .library-card {
+    width: min(94vw, 760px);
+    max-height: 90vh;
+    padding: 18px;
+  }
+
+  .library-save-row,
+  .library-item {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .library-item-actions .btn {
+    flex: 1;
   }
 }

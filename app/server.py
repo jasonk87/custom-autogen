@@ -3,9 +3,9 @@ import base64
 import html
 import json
 import os
-import queue
 import shutil
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict
 
@@ -29,7 +29,7 @@ from app.config import (
 )
 from app.core import TOOL_REFLECTION_GUIDANCE, run_orchestrator, OrchestratorError
 from app.scenario import generate_agents_from_scenario
-from app.state import state
+from app.state import ReplayEventBuffer, state
 from app.tools import TOOLS
 from app.utils import tree_listing
 from app.model_providers import get_available_models, get_model_client, load_user_settings, save_user_settings
@@ -42,6 +42,8 @@ app = Quart(
     template_folder=os.path.join(root_dir, "templates"),
     static_folder=os.path.join(root_dir, "static"),
 )
+SCENARIO_GENERATION_ATTEMPTS = 3
+SCENARIO_GENERATION_RETRY_DELAY_SECONDS = 0.75
 
 
 def _is_production() -> bool:
@@ -56,6 +58,21 @@ def _workspace_root() -> str:
     return getattr(state, "active_workspace", WORKSPACE_DIR) or WORKSPACE_DIR
 
 
+def _is_transient_provider_error(error: BaseException | str) -> bool:
+    message = str(error).lower()
+    return any(
+        marker in message
+        for marker in (
+            "503",
+            "unavailable",
+            "high demand",
+            "temporarily unavailable",
+            "rate limit",
+            "429",
+        )
+    )
+
+
 def _resolve_workspace_path(path: str) -> str:
     base_path = os.path.realpath(_workspace_root())
     target_path = os.path.realpath(os.path.join(base_path, path))
@@ -64,7 +81,7 @@ def _resolve_workspace_path(path: str) -> str:
     return target_path
 
 
-def _run_orchestrator_thread(goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy_mode, human_proxy_preferences, temperature, allow_tools):
+def _run_orchestrator_thread(goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy_mode, human_proxy_preferences, temperature, allow_tools, conversation_mode="discussion"):
     try:
         asyncio.run(
             run_orchestrator(
@@ -78,6 +95,7 @@ def _run_orchestrator_thread(goal, model, agents_cfg, manager_mode, out_q, max_t
                 human_proxy_preferences,
                 temperature,
                 allow_tools,
+                conversation_mode,
             )
         )
     except OrchestratorError as e:
@@ -91,6 +109,8 @@ def _run_orchestrator_thread(goal, model, agents_cfg, manager_mode, out_q, max_t
         log.error("orchestrator_thread_unexpected_error", extra={"error": str(e), "type": type(e).__name__}, exc_info=e)
         out_q.put(json.dumps(OrchestratorError("An unexpected error occurred in the orchestrator thread.", str(e)).to_payload()))
         out_q.put("[DONE]")
+    finally:
+        state.finish()
 
 
 @app.get("/favicon.ico")
@@ -104,12 +124,15 @@ async def stream():
     goal_b64 = request.args.get("goal", "")
     agents_b64 = request.args.get("agents", "")
     manager_mode = request.args.get("manager_mode", "auto")
+    conversation_mode = request.args.get("conversation_mode", "discussion")
     max_turns = int(request.args.get("turns", "60"))
     legacy_human_proxy = request.args.get("human_proxy", "false").lower() == "true"
     human_proxy_mode = request.args.get("human_proxy_mode", "consult" if legacy_human_proxy else "off")
     human_proxy_preferences = request.args.get("human_proxy_preferences", "")
     temperature = float(request.args.get("temperature", "0.3"))
     allow_tools = request.args.get("allow_tools", "true").lower() == "true"
+    client_run_token = request.args.get("run_token", "").strip() or uuid.uuid4().hex
+    resume_only = request.args.get("resume_only", "false").lower() == "true"
 
     try:
         goal = base64.b64decode(goal_b64.encode()).decode(errors="ignore") if goal_b64 else ""
@@ -121,32 +144,68 @@ async def stream():
     except Exception:
         agents_cfg = []
 
-    out_q: "queue.Queue[str]" = queue.Queue()
-    thread_args = (goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy_mode, human_proxy_preferences, temperature, allow_tools)
-    state.start(_run_orchestrator_thread, thread_args)
+    out_q = state.reconnect_buffer(client_run_token)
+    reconnecting = out_q is not None
+    if out_q is None:
+        if resume_only:
+            payload = OrchestratorError(
+                "The saved scenario is no longer available. Start a new task.",
+                f"No buffered run exists for token {client_run_token}.",
+                "run_not_found",
+            ).to_payload()
+            return jsonify(payload), 404
+        out_q = ReplayEventBuffer()
+        thread_args = (goal, model, agents_cfg, manager_mode, out_q, max_turns, human_proxy_mode, human_proxy_preferences, temperature, allow_tools, conversation_mode)
+        try:
+            state.start(_run_orchestrator_thread, thread_args, client_run_token, out_q)
+        except RuntimeError as e:
+            log.warning(
+                "stream_start_rejected_active_run",
+                extra={
+                    "run_id": state.current_run_id,
+                    "client_run_token": client_run_token,
+                    "matches_active_token": client_run_token == state.current_client_run_token,
+                },
+            )
+            payload = OrchestratorError(
+                "A scenario is already running. Reconnect to it or stop it before starting another.",
+                str(e),
+                "run_already_active",
+            ).to_payload()
+            return jsonify(payload), 409
+
+    try:
+        last_event_id = int(request.headers.get("Last-Event-ID", "0") or "0")
+    except ValueError:
+        last_event_id = 0
 
     async def gen():
+        cursor = max(last_event_id, 0)
         last_ping = time.time()
         log.info(
-            "stream_started",
+            "stream_reattached" if reconnecting else "stream_started",
             extra={
                 "run_id": state.current_run_id,
+                "client_run_token": client_run_token,
                 "model": model,
                 "goal_len": len(goal),
                 "manager_mode": manager_mode,
+                "conversation_mode": conversation_mode,
                 "human_proxy_mode": human_proxy_mode,
             },
         )
         try:
             while True:
                 try:
-                    item = await asyncio.to_thread(out_q.get, True, 2.0)
-                    yield f"data: {item}\n\n"
-                    last_ping = time.time()
-                    if item == "[DONE]":
-                        log.info("stream_finished_cleanly", extra={"run_id": state.current_run_id})
-                        break
-                except queue.Empty:
+                    events = await asyncio.to_thread(out_q.read_after, cursor, 2.0)
+                    if events:
+                        for event_id, item in events:
+                            yield f"id: {event_id}\ndata: {item}\n\n"
+                            cursor = event_id
+                            last_ping = time.time()
+                            if item == "[DONE]":
+                                log.info("stream_finished_cleanly", extra={"run_id": state.current_run_id})
+                                return
                     now = time.time()
                     if now - last_ping > 2.0:
                         yield ": ping\n\n"
@@ -173,6 +232,47 @@ async def stream():
 async def stop():
     state.stop()
     return jsonify({"ok": True})
+
+
+@app.post("/api/run/resume")
+async def resume_run():
+    data = await request.get_json() or {}
+    client_run_token = str(data.get("run_token") or "").strip()
+    try:
+        target, previous_args, out_q, transcript = state.prepare_resume(client_run_token)
+    except RuntimeError as e:
+        return jsonify(
+            OrchestratorError(
+                "The stopped simulation is not ready to resume. Try again shortly.",
+                str(e),
+                "run_not_resumable",
+            ).to_payload()
+        ), 409
+
+    previous_goal = previous_args[0]
+    continuation_goal = (
+        f"{previous_goal}\n\n"
+        "Resume the existing simulation from the transcript below. Continue the work naturally from "
+        "the latest point. Do not restart the scenario, repeat introductions, or restate the original "
+        "task as a new assignment.\n\n"
+        f"Transcript before pause:\n{transcript or '(No prior chat messages were captured.)'}"
+    )
+    thread_args = (continuation_goal, *previous_args[1:4], out_q, *previous_args[5:])
+    state.start(target, thread_args, client_run_token, out_q)
+    out_q.put(json.dumps({"type": "chat", "sender": "System", "message": "Simulation resumed."}))
+    return jsonify({"ok": True})
+
+
+@app.get("/api/run/status")
+async def run_status():
+    client_run_token = request.args.get("run_token", "").strip() or None
+    return jsonify(
+        {
+            "available": state.reconnect_buffer(client_run_token) is not None,
+            "running": state.is_running,
+            "resumable": state.resumable(client_run_token),
+        }
+    )
 
 
 @app.post("/user_input")
@@ -225,8 +325,18 @@ async def scenario_generate():
         return jsonify(OrchestratorError("Invalid 'num_agents' in request.", "num_agents must be a positive integer.", "invalid_num_agents_input").to_payload()), 400
 
     try:
-        agents, suggested_goal = await generate_agents_from_scenario(scenario, model, num_agents)
-        return jsonify({"agents": agents, "goal": suggested_goal})
+        for attempt in range(1, SCENARIO_GENERATION_ATTEMPTS + 1):
+            try:
+                agents, suggested_goal = await generate_agents_from_scenario(scenario, model, num_agents)
+                return jsonify({"agents": agents, "goal": suggested_goal})
+            except Exception as e:
+                if not _is_transient_provider_error(e) or attempt == SCENARIO_GENERATION_ATTEMPTS:
+                    raise
+                log.warning(
+                    "scenario_generation_transient_error_retrying",
+                    extra={"attempt": attempt, "max_attempts": SCENARIO_GENERATION_ATTEMPTS, "error": str(e)},
+                )
+                await asyncio.sleep(SCENARIO_GENERATION_RETRY_DELAY_SECONDS)
     except OrchestratorError as e:
         log.error("failed_to_generate_agents_known_error", extra={"error_code": e.error_code, "user_message": e.user_message, "developer_message": e.developer_message}, exc_info=e)
         return jsonify(e.to_payload()), 500
@@ -249,6 +359,14 @@ async def scenario_generate():
                     "gemini_api_key_invalid",
                 ).to_payload()
             ), 500
+        if _is_transient_provider_error(e):
+            return jsonify(
+                OrchestratorError(
+                    "The selected AI model is temporarily busy. Please try generating the scenario again shortly.",
+                    error_message,
+                    "model_temporarily_unavailable",
+                ).to_payload()
+            ), 503
         return jsonify(OrchestratorError("Failed to generate agents due to an unexpected error.", error_message).to_payload()), 500
 
 
@@ -598,8 +716,14 @@ async def sessions_save():
     if not name:
         return jsonify(OrchestratorError("Missing 'name' for session save.", "Session name is missing or empty.", "missing_session_name").to_payload()), 400
 
-    fp = os.path.join(SESSIONS_DIR, f"{name}.json")
+    artifact_type = data.get("artifact_type")
+    if artifact_type not in {None, "scenario", "group"}:
+        return jsonify(OrchestratorError("Invalid saved item type.", f"Unsupported artifact_type: {artifact_type}", "invalid_artifact_type").to_payload()), 400
+
+    filename = f"{artifact_type}_{name}.json" if artifact_type else f"{name}.json"
+    fp = os.path.join(SESSIONS_DIR, filename)
     try:
+        os.makedirs(SESSIONS_DIR, exist_ok=True)
         with open(fp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
         return jsonify({"ok": True, "file": fp}), 201
