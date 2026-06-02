@@ -1153,7 +1153,6 @@ function bindTabs() {
       $(`#${target}`).classList.remove('hidden');
       const footer = $('.side-footer');
       if (footer) footer.style.display = target === 'setup' ? 'flex' : 'none';
-      if (window.innerWidth <= 768) closeSidebar();
 
       if (target === 'work') await refreshTree();
       if (target === 'playground') await loadToolsForPlayground();
