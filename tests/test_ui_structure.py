@@ -77,6 +77,10 @@ def test_stream_errors_reconnect_to_active_run():
     assert "es.close();\n        localStorage.removeItem(ACTIVE_RUN_URL_KEY);" in script
     assert "reconnectUrl.searchParams.set('resume_only', 'true')" in script
     assert "setStatus('reconnecting')" in script
+    assert "Status: Reconnecting..." in script
+    assert "let reconnectProbeTimer = null;" in script
+    assert "Lost connection to the simulation. Start a new task when ready." in script
+    assert "if (!$('#chat')?.children.length) renderEmptyChat();" in script
     assert "Supervisor choosing next speaker..." in script
     assert "function normalizeManagerMode(mode)" in script
     assert "normalized === 'auto' || normalized === 'smartsupervisor'" in script

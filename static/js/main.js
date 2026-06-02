@@ -9,6 +9,7 @@ let runCanResume = false;
 let currentStatus = 'idle';
 let workspaceSession = null;
 let loadedScenarioTranscript = [];
+let reconnectProbeTimer = null;
 const think = { active: false, buffer: '', open: false, minimized: false };
 const playgroundState = { toolNames: [] };
 const SESSION_KEY = 'agentStudioSession';
@@ -376,6 +377,7 @@ function setStatus(state) {
     running: 'Status: Agents working...',
     supervising: 'Status: Supervisor choosing next speaker...',
     waiting_for_input: 'Status: Waiting for input...',
+    reconnecting: 'Status: Reconnecting...',
     waiting_for_manual_selection: 'Status: Waiting for speaker selection...'
   };
   status.textContent = map[state] || 'Status';
@@ -737,6 +739,10 @@ async function resumeSimulation() {
 
 function connectRunStream(url) {
   if (es) es.close();
+  if (reconnectProbeTimer) {
+    clearTimeout(reconnectProbeTimer);
+    reconnectProbeTimer = null;
+  }
   runActive = true;
   setStatus('running');
   buttons(true);
@@ -745,6 +751,10 @@ function connectRunStream(url) {
     if (ev.data === '[DONE]') {
       es.close();
       runActive = false;
+      if (reconnectProbeTimer) {
+        clearTimeout(reconnectProbeTimer);
+        reconnectProbeTimer = null;
+      }
       if (runCanResume) {
         setStatus('paused');
         buttons(false, true);
@@ -765,6 +775,10 @@ function connectRunStream(url) {
         es.close();
         localStorage.removeItem(ACTIVE_RUN_URL_KEY);
         runActive = false;
+        if (reconnectProbeTimer) {
+          clearTimeout(reconnectProbeTimer);
+          reconnectProbeTimer = null;
+        }
         setStatus('idle');
         buttons(false);
       } else {
@@ -782,6 +796,29 @@ function connectRunStream(url) {
   es.onerror = () => {
     if (!runActive) return;
     setStatus('reconnecting');
+    if (reconnectProbeTimer) return;
+    reconnectProbeTimer = setTimeout(async () => {
+      reconnectProbeTimer = null;
+      if (!runActive) return;
+      const runToken = new URL(url, window.location.origin).searchParams.get('run_token') || '';
+      try {
+        const response = await fetch(`/api/run/status?run_token=${encodeURIComponent(runToken)}`);
+        if (response.ok) {
+          const status = await response.json();
+          if (status.available || status.running) return;
+        }
+      } catch {
+        // The server is unreachable; clear the stale run state below.
+      }
+      if (es) es.close();
+      localStorage.removeItem(ACTIVE_RUN_URL_KEY);
+      runActive = false;
+      runCanResume = false;
+      if (!$('#chat')?.children.length) renderEmptyChat();
+      setStatus('idle');
+      buttons(false);
+      toast('Lost connection to the simulation. Start a new task when ready.');
+    }, 3500);
   };
 }
 
@@ -821,8 +858,14 @@ async function reconnectActiveRun() {
   $('#chat').innerHTML = '';
   const reconnectUrl = new URL(url, window.location.origin);
   const runToken = reconnectUrl.searchParams.get('run_token');
-  const statusResponse = await fetch(`/api/run/status?run_token=${encodeURIComponent(runToken || '')}`);
-  const status = await statusResponse.json();
+  let status;
+  try {
+    const statusResponse = await fetch(`/api/run/status?run_token=${encodeURIComponent(runToken || '')}`);
+    status = await statusResponse.json();
+  } catch {
+    localStorage.removeItem(ACTIVE_RUN_URL_KEY);
+    return false;
+  }
   if (!status.available) {
     localStorage.removeItem(ACTIVE_RUN_URL_KEY);
     return false;
