@@ -127,6 +127,23 @@ async def test_scenario_generate_defaults_missing_or_empty_model(client, model):
     mock_generate.assert_called_once_with("create a website", DEFAULT_MODEL, 2, "discussion")
 
 
+async def test_scenario_idea_defaults_empty_model(client):
+    with mock.patch("app.server.generate_scenario_idea") as mock_generate:
+        mock_generate.return_value = "A treasure hunt inside a drifting space station."
+        resp = await client.post("/api/scenario/idea", json={"model": ""})
+
+    assert resp.status_code == 200
+    assert (await resp.get_json())["scenario"] == "A treasure hunt inside a drifting space station."
+    mock_generate.assert_awaited_once_with(DEFAULT_MODEL)
+
+
+async def test_scenario_idea_rejects_non_string_model(client):
+    resp = await client.post("/api/scenario/idea", json={"model": 123})
+
+    assert resp.status_code == 400
+    assert (await resp.get_json())["error_code"] == "invalid_model_input"
+
+
 async def test_scenario_generate_retries_transient_provider_error(client):
     with (
         mock.patch('app.server.generate_agents_from_scenario') as mock_generate,

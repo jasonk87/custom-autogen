@@ -3,7 +3,7 @@ from unittest import mock
 
 import pytest
 
-from app.scenario import _normalize_agent_names, _strip_json_fence, generate_agents_from_scenario
+from app.scenario import _normalize_agent_names, _strip_json_fence, generate_agents_from_scenario, generate_scenario_idea
 
 
 @pytest.mark.parametrize(
@@ -16,6 +16,19 @@ from app.scenario import _normalize_agent_names, _strip_json_fence, generate_age
 )
 def test_strip_json_fence(content, expected):
     assert _strip_json_fence(content) == expected
+
+
+@pytest.mark.asyncio
+async def test_generate_scenario_idea_uses_one_model_call_and_extracts_json():
+    client = mock.AsyncMock()
+    client.create.return_value = SimpleNamespace(
+        content='{"scenario":"Treasure hunters discover an abandoned observatory beneath a flooded city."}'
+    )
+    with mock.patch("app.scenario.get_model_client", return_value=client):
+        idea = await generate_scenario_idea("gemini-test")
+
+    assert idea == "Treasure hunters discover an abandoned observatory beneath a flooded city."
+    client.create.assert_awaited_once()
 
 
 def test_normalize_agent_names_produces_unique_python_identifiers():

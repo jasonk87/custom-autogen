@@ -921,6 +921,34 @@ async function loadOllamaSettings() {
   }
 }
 
+async function rollScenarioIdea() {
+  const button = $('#random-scenario');
+  if (!button || button.disabled) return;
+  button.disabled = true;
+  button.classList.add('rolling');
+  try {
+    const r = await fetch('/api/scenario/idea', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: $('#model').value })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.user_message || d.error || 'Idea generation failed.');
+
+    beginNewSetup();
+    agents = [];
+    $('#scenario').value = d.scenario || '';
+    $('#goal').value = '';
+    renderTeam();
+    saveSession();
+  } catch (e) {
+    toast(e.message || 'Failed to generate a scenario idea.');
+  } finally {
+    button.disabled = false;
+    button.classList.remove('rolling');
+  }
+}
+
 async function refreshTree() {
   const r = await fetch('/api/workspace/tree');
   const d = await r.json();
@@ -1215,6 +1243,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     saveSession();
   };
 
+  $('#random-scenario').onclick = rollScenarioIdea;
+
   $('#generate-agents').onclick = async () => {
     const scenario = $('#scenario').value.trim();
     if (!scenario) return;
@@ -1436,14 +1466,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   await loadOllamaSettings();
-  await loadModels();
-  renderTeam();
-  updateHumanProxyPreferencesVisibility();
-  updateConversationModeHint();
   if (!await reconnectActiveRun()) {
     clearDraftSetup();
     renderTeam();
     setStatus('idle');
     buttons(false);
   }
+  $('#random-scenario').disabled = false;
+  await loadModels();
+  renderTeam();
+  updateHumanProxyPreferencesVisibility();
+  updateConversationModeHint();
 });

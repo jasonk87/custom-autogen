@@ -28,7 +28,7 @@ from app.config import (
     require_gemini_api_key,
 )
 from app.core import TOOL_REFLECTION_GUIDANCE, run_orchestrator, OrchestratorError
-from app.scenario import generate_agents_from_scenario
+from app.scenario import generate_agents_from_scenario, generate_scenario_idea
 from app.state import ReplayEventBuffer, state
 from app.tools import TOOLS
 from app.utils import tree_listing
@@ -374,6 +374,28 @@ async def scenario_generate():
                 ).to_payload()
             ), 503
         return jsonify(OrchestratorError("Failed to generate agents due to an unexpected error.", error_message).to_payload()), 500
+
+
+@app.post("/api/scenario/idea")
+async def scenario_idea():
+    data = await request.get_json() or {}
+    model = data.get("model") or DEFAULT_MODEL
+    if not isinstance(model, str):
+        return jsonify(OrchestratorError("Invalid model selection.", "Model is not a string.", "invalid_model_input").to_payload()), 400
+    try:
+        idea = await generate_scenario_idea(model)
+        return jsonify({"scenario": idea})
+    except Exception as e:
+        log.error("failed_to_generate_scenario_idea", extra={"error": str(e)}, exc_info=e)
+        if _is_transient_provider_error(e):
+            return jsonify(
+                OrchestratorError(
+                    "The idea generator is temporarily busy. Try the dice again shortly.",
+                    str(e),
+                    "model_temporarily_unavailable",
+                ).to_payload()
+            ), 503
+        return jsonify(OrchestratorError("Failed to generate a scenario idea.", str(e)).to_payload()), 500
 
 
 @app.route("/api/settings/ollama", methods=["GET", "POST"])

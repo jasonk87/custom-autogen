@@ -295,6 +295,44 @@ textarea {
   backdrop-filter: blur(8px);
 }
 
+.scenario-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dice-button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  padding: 6px;
+  place-items: center;
+  border-color: hsla(var(--primary-hsl), 0.4);
+  color: #93c5fd;
+}
+
+.dice-button svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+}
+
+.dice-button.rolling svg {
+  animation: diceRoll 0.8s ease-in-out infinite;
+}
+
+@keyframes diceRoll {
+  50% { transform: rotate(135deg) scale(0.88); }
+  100% { transform: rotate(270deg); }
+}
+
 details {
   background: hsla(222, 47%, 10%, 0.3);
   border: 1px solid var(--border);

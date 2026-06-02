@@ -1,5 +1,6 @@
 import json
 import keyword
+import random
 import re
 from typing import Any, Dict, List
 from pydantic import BaseModel, Field
@@ -17,6 +18,20 @@ class AgentConfig(BaseModel):
 
 class AgentList(BaseModel):
     agents: List[AgentConfig]
+
+
+SCENARIO_IDEA_CUES = [
+    "survival under unusual environmental pressure",
+    "a character-driven family or friendship conflict",
+    "treasure hunting with a surprising obstacle",
+    "a strange but plausible software engineering challenge",
+    "a high-stakes workplace decision with clashing incentives",
+    "a science-fiction emergency with social tension",
+    "a playful mystery with an unexpected setting",
+    "a fantasy expedition with competing loyalties",
+    "a community problem that forces difficult tradeoffs",
+    "an ambitious creative project with conflicting personalities",
+]
 
 
 def _strip_json_fence(content: str) -> str:
@@ -68,6 +83,31 @@ def _normalize_agent_names(agents: List[Dict[str, Any]]) -> List[Dict[str, Any]]
             relationships.append({"target": target, "relation": relation, "notes": notes})
         agent["relationships"] = relationships
     return normalized_agents
+
+
+async def generate_scenario_idea(model: str) -> str:
+    """Generate one concise scenario seed without building an agent roster."""
+    client = get_model_client(model or DEFAULT_MODEL, temperature=0.9)
+    cue = random.choice(SCENARIO_IDEA_CUES)
+    prompt = f"""
+Generate one fresh scenario idea for a multi-agent conversation or simulation.
+Use this inspiration direction: {cue}.
+
+Vary genres and stakes. Ideas may be realistic, funny, dramatic, technical, survival-focused,
+adventurous, mysterious, or imaginative. Include enough specificity to inspire a team of agents,
+but keep the result to one concise sentence between 8 and 28 words.
+
+Return ONLY valid JSON in this format: {{"scenario": "the scenario idea"}}
+"""
+    response = await client.create(messages=[UserMessage(content=prompt, source="user")])
+    try:
+        payload = json.loads(_strip_json_fence(response.content))
+        scenario = str(payload.get("scenario", "")).strip()
+    except Exception:
+        scenario = str(response.content or "").strip()
+    if not scenario:
+        raise ValueError("The model returned an empty scenario idea.")
+    return scenario
 
 
 async def generate_agents_from_scenario(
