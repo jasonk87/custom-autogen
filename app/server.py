@@ -32,7 +32,7 @@ from app.scenario import generate_agents_from_scenario, generate_scenario_idea
 from app.state import ReplayEventBuffer, state
 from app.tools import TOOLS
 from app.utils import tree_listing
-from app.model_providers import get_available_models, get_model_client, load_user_settings, save_user_settings
+from app.model_providers import get_cloud_models, get_model_client, get_ollama_models, load_user_settings, save_user_settings
 
 
 app_dir = os.path.dirname(os.path.abspath(__file__))
@@ -423,8 +423,12 @@ async def set_ollama():
 
 @app.get("/api/models")
 async def api_models():
-    models = await get_available_models()
-    return jsonify(models)
+    return jsonify(get_cloud_models())
+
+
+@app.get("/api/models/ollama")
+async def api_ollama_models():
+    return jsonify(await get_ollama_models())
 
 
 @app.get("/api/tools")

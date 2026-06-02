@@ -142,6 +142,24 @@ function appendChatBox(sender, className = '') {
   return { chat, box };
 }
 
+function renderEmptyChat() {
+  const chat = $('#chat');
+  if (!chat) return;
+  chat.innerHTML = `
+    <div class="chat-empty">
+      <div class="chat-empty-icon" aria-hidden="true">+</div>
+      <div class="chat-empty-kicker">Multi-agent workspace</div>
+      <h2>Build a team for your next task</h2>
+      <p>Describe a scenario, generate specialized agents, and guide their work from one place.</p>
+      <button id="empty-open-setup" class="btn btn-primary" type="button">Open setup</button>
+    </div>
+  `;
+  $('#empty-open-setup').onclick = () => {
+    $('.side').classList.add('open');
+    $('#sidebar-overlay').classList.add('open');
+  };
+}
+
 function addToolRequest(sender, tools) {
   const entry = appendChatBox(sender, 'tool-card tool-request');
   if (!entry) return;
@@ -637,7 +655,7 @@ function beginNewSetup() {
   localStorage.removeItem(ACTIVE_RUN_URL_KEY);
   runCanResume = false;
   window.__transcript = [];
-  $('#chat').innerHTML = '';
+  renderEmptyChat();
   setStatus('idle');
   buttons(false);
 }
@@ -653,6 +671,7 @@ function startNewTask() {
   beginNewSetup();
   clearDraftSetup();
   renderTeam();
+  renderEmptyChat();
   closeThinkDock();
   toast('Ready for a new task.');
 }
@@ -866,17 +885,9 @@ function getSavedSettings() {
   }
 }
 
-async function loadModels() {
-  const generateButton = $('#generate-agents');
-  if (generateButton) {
-    generateButton.disabled = true;
-    generateButton.textContent = 'Loading Models...';
-  }
-  $('#model-hint').textContent = 'Loading available models...';
-  const r = await fetch('/api/models');
-  const models = await r.json();
+function renderModelOptions(models, { preserveSelection = false } = {}) {
   const sel = $('#model');
-  
+  const previousSelection = preserveSelection ? sel.value : '';
   const groups = {
     'Google': models.filter(m => m.provider === 'gemini'),
     'Local Ollama': models.filter(m => m.source === 'local'),
@@ -889,10 +900,42 @@ async function loadModels() {
       html += `<optgroup label="${escapeHtml(groupName)}">` + groupModels.map(m => `<option value="${escapeHtml(m.value)}">${escapeHtml(m.label)}</option>`).join('') + `</optgroup>`;
     }
   }
-
   sel.innerHTML = html;
+  if (previousSelection && models.some(model => model.value === previousSelection)) {
+    sel.value = previousSelection;
+  }
+  return sel;
+}
+
+async function loadOllamaModels(cloudModels, selectedModel) {
+  $('#model-hint').textContent = 'Google models ready. Checking Ollama servers in the background...';
+  try {
+    const r = await fetch('/api/models/ollama');
+    const ollamaModels = await r.json();
+    const models = [...cloudModels, ...(Array.isArray(ollamaModels) ? ollamaModels : [])];
+    const sel = renderModelOptions(models, { preserveSelection: true });
+    if (selectedModel && models.some(model => model.value === selectedModel)) sel.value = selectedModel;
+    $('#model-count').textContent = `${models.length}`;
+    $('#model-hint').textContent = ollamaModels.length
+      ? `Loaded ${models.length} model options, including Ollama.`
+      : `Loaded ${models.length} Google model options. No Ollama servers responded.`;
+  } catch {
+    $('#model-hint').textContent = `Loaded ${cloudModels.length} Google model options. Ollama discovery failed.`;
+  }
+}
+
+async function loadModels() {
+  const generateButton = $('#generate-agents');
+  if (generateButton) {
+    generateButton.disabled = true;
+    generateButton.textContent = 'Loading Models...';
+  }
+  $('#model-hint').textContent = 'Loading Google models...';
+  const r = await fetch('/api/models');
+  const models = await r.json();
+  const sel = renderModelOptions(models);
   $('#model-count').textContent = `${models.length}`;
-  $('#model-hint').textContent = models.length ? `Loaded ${models.length} model options.` : 'No models loaded.';
+  $('#model-hint').textContent = models.length ? `Loaded ${models.length} Google model options.` : 'No Google models loaded.';
 
   const savedSettings = getSavedSettings();
   const values = models.map(m => m.value);
@@ -910,6 +953,7 @@ async function loadModels() {
     generateButton.disabled = !sel.value;
     generateButton.textContent = 'Generate Scenario';
   }
+  void loadOllamaModels(models, sel.value);
 }
 
 async function loadOllamaSettings() {
@@ -1469,6 +1513,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (!await reconnectActiveRun()) {
     clearDraftSetup();
     renderTeam();
+    renderEmptyChat();
     setStatus('idle');
     buttons(false);
   }

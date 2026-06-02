@@ -144,6 +144,31 @@ async def test_scenario_idea_rejects_non_string_model(client):
     assert (await resp.get_json())["error_code"] == "invalid_model_input"
 
 
+async def test_api_models_returns_cloud_catalog_without_waiting_for_ollama(client):
+    with (
+        mock.patch("app.server.get_cloud_models", return_value=[{"value": "gemini::cloud::fast"}]) as cloud,
+        mock.patch("app.server.get_ollama_models") as ollama,
+    ):
+        resp = await client.get("/api/models")
+
+    assert resp.status_code == 200
+    assert await resp.get_json() == [{"value": "gemini::cloud::fast"}]
+    cloud.assert_called_once_with()
+    ollama.assert_not_called()
+
+
+async def test_api_ollama_models_returns_background_catalog(client):
+    with mock.patch(
+        "app.server.get_ollama_models",
+        new=mock.AsyncMock(return_value=[{"value": "ollama::local::llama"}]),
+    ) as ollama:
+        resp = await client.get("/api/models/ollama")
+
+    assert resp.status_code == 200
+    assert await resp.get_json() == [{"value": "ollama::local::llama"}]
+    ollama.assert_awaited_once_with()
+
+
 async def test_scenario_generate_retries_transient_provider_error(client):
     with (
         mock.patch('app.server.generate_agents_from_scenario') as mock_generate,

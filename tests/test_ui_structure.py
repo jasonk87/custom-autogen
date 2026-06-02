@@ -91,6 +91,10 @@ def test_stream_errors_reconnect_to_active_run():
     assert "fetch('/api/scenario/idea'" in script
     assert "$('#random-scenario').onclick = rollScenarioIdea" in script
     assert "$('#random-scenario').disabled = false;" in script
+    assert "function renderEmptyChat()" in script
+    assert "async function loadOllamaModels(cloudModels, selectedModel)" in script
+    assert "fetch('/api/models/ollama')" in script
+    assert "renderModelOptions(models, { preserveSelection: true })" in script
     assert "function normalizeConversationMode(mode)" in script
     assert "$('#conversation-mode').addEventListener('change'" in script
     assert "const RELATIONSHIP_TYPES = [" in script
