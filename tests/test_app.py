@@ -138,17 +138,18 @@ async def test_scenario_generate_defaults_missing_or_empty_model(client, model):
 
 async def test_scenario_idea_uses_flash_lite_regardless_of_selected_model(client):
     with mock.patch("app.server.generate_scenario_idea") as mock_generate:
-        mock_generate.return_value = "A treasure hunt inside a drifting space station."
+        mock_generate.return_value = ("A treasure hunt inside a drifting space station.", 4)
         resp = await client.post("/api/scenario/idea", json={"model": "gemini::cloud::gemini-2.5-pro"})
 
     assert resp.status_code == 200
     assert (await resp.get_json())["scenario"] == "A treasure hunt inside a drifting space station."
+    assert (await resp.get_json())["num_agents"] == 4
     mock_generate.assert_awaited_once_with("gemini::cloud::gemini-2.5-flash-lite")
 
 
 async def test_scenario_idea_ignores_invalid_selected_model(client):
     with mock.patch("app.server.generate_scenario_idea") as mock_generate:
-        mock_generate.return_value = "A quick scenario idea."
+        mock_generate.return_value = ("A quick scenario idea.", 2)
         resp = await client.post("/api/scenario/idea", json={"model": 123})
 
     assert resp.status_code == 200

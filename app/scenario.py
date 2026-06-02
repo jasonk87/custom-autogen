@@ -131,8 +131,15 @@ def _normalize_agent_names(agents: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     return normalized_agents
 
 
-async def generate_scenario_idea(model: str) -> str:
-    """Generate one concise scenario seed without building an agent roster."""
+def _normalize_scenario_agent_count(value: Any) -> int:
+    try:
+        return max(2, min(10, int(value)))
+    except (TypeError, ValueError):
+        return 3
+
+
+async def generate_scenario_idea(model: str) -> Tuple[str, int]:
+    """Generate one concise scenario seed and a recommended roster size."""
     client = get_model_client(model or DEFAULT_MODEL, temperature=0.9)
     cue = random.choice(SCENARIO_IDEA_CUES)
     prompt = f"""
@@ -142,18 +149,22 @@ Use this inspiration direction: {cue}.
 Vary genres and stakes. Ideas may be realistic, funny, dramatic, technical, survival-focused,
 adventurous, mysterious, or imaginative. Include enough specificity to inspire a team of agents,
 but keep the result to one concise sentence between 8 and 28 words.
+Choose how many distinct agents are useful for the scenario. Use the smallest roster that creates
+meaningful interaction, usually between 2 and 6 agents. Only exceed 6 when the scenario clearly needs it.
 
-Return ONLY valid JSON in this format: {{"scenario": "the scenario idea"}}
+Return ONLY valid JSON in this format: {{"scenario": "the scenario idea", "num_agents": 3}}
 """
     response = await client.create(messages=[UserMessage(content=prompt, source="user")])
     try:
         payload = json.loads(_strip_json_fence(response.content))
         scenario = str(payload.get("scenario", "")).strip()
+        num_agents = _normalize_scenario_agent_count(payload.get("num_agents"))
     except Exception:
         scenario = str(response.content or "").strip()
+        num_agents = 3
     if not scenario:
         raise ValueError("The model returned an empty scenario idea.")
-    return scenario
+    return scenario, num_agents
 
 
 async def generate_agents_from_scenario(

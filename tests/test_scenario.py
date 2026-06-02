@@ -3,7 +3,7 @@ from unittest import mock
 
 import pytest
 
-from app.scenario import _infer_conversation_mode, _normalize_agent_names, _normalize_conversation_mode, _strip_json_fence, generate_agents_from_scenario, generate_scenario_idea
+from app.scenario import _infer_conversation_mode, _normalize_agent_names, _normalize_conversation_mode, _normalize_scenario_agent_count, _strip_json_fence, generate_agents_from_scenario, generate_scenario_idea
 
 
 @pytest.mark.parametrize(
@@ -22,13 +22,19 @@ def test_strip_json_fence(content, expected):
 async def test_generate_scenario_idea_uses_one_model_call_and_extracts_json():
     client = mock.AsyncMock()
     client.create.return_value = SimpleNamespace(
-        content='{"scenario":"Treasure hunters discover an abandoned observatory beneath a flooded city."}'
+        content='{"scenario":"Treasure hunters discover an abandoned observatory beneath a flooded city.","num_agents":4}'
     )
     with mock.patch("app.scenario.get_model_client", return_value=client):
-        idea = await generate_scenario_idea("gemini-test")
+        idea, num_agents = await generate_scenario_idea("gemini-test")
 
     assert idea == "Treasure hunters discover an abandoned observatory beneath a flooded city."
+    assert num_agents == 4
     client.create.assert_awaited_once()
+
+
+@pytest.mark.parametrize(("value", "expected"), [(1, 2), (6, 6), (99, 10), ("4", 4), ("bad", 3), (None, 3)])
+def test_normalize_scenario_agent_count_clamps_to_supported_range(value, expected):
+    assert _normalize_scenario_agent_count(value) == expected
 
 
 def test_normalize_conversation_mode_defaults_invalid_values_to_discussion():

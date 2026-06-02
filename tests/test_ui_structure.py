@@ -96,7 +96,8 @@ def test_stream_errors_reconnect_to_active_run():
     assert "$('#random-scenario').onclick = rollScenarioIdea" in script
     assert "$('#random-scenario').disabled = false;" in script
     assert "Generating a fresh idea..." in script
-    assert "New idea ready. Tap the dice again to explore another." in script
+    assert "New idea ready with ${d.num_agents || 3} suggested agents." in script
+    assert "$('#num-agents').value = d.num_agents || 3;" in script
     assert "function renderEmptyChat()" in script
     assert "async function loadOllamaModels(cloudModels, selectedModel)" in script
     assert "fetch('/api/models/ollama')" in script

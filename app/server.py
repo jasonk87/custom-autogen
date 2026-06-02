@@ -412,8 +412,8 @@ async def scenario_generate():
 @app.post("/api/scenario/idea")
 async def scenario_idea():
     try:
-        idea = await generate_scenario_idea(SCENARIO_IDEA_MODEL)
-        return jsonify({"scenario": idea})
+        idea, num_agents = await generate_scenario_idea(SCENARIO_IDEA_MODEL)
+        return jsonify({"scenario": idea, "num_agents": num_agents})
     except Exception as e:
         log.error("failed_to_generate_scenario_idea", extra={"error": str(e)}, exc_info=e)
         if _is_transient_provider_error(e):

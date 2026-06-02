@@ -1028,10 +1028,11 @@ async function rollScenarioIdea() {
     await activateScenarioWorkspace();
     agents = [];
     $('#scenario').value = d.scenario || '';
+    $('#num-agents').value = d.num_agents || 3;
     $('#goal').value = '';
     renderTeam();
     saveSession();
-    if (status) status.textContent = 'New idea ready. Tap the dice again to explore another.';
+    if (status) status.textContent = `New idea ready with ${d.num_agents || 3} suggested agents. Tap the dice again to explore another.`;
   } catch (e) {
     toast(e.message || 'Failed to generate a scenario idea.');
     if (status) status.textContent = 'Idea generation failed. Tap the dice to try again.';
