@@ -86,6 +86,7 @@ def test_stream_errors_reconnect_to_active_run():
     assert "$('#scenario').addEventListener('change', saveSession)" in script
     assert "loadSession();" in script
     assert "conversation_mode: $('#conversation-mode').value" in script
+    assert "$('#conversation-mode').value = normalizeConversationMode(d.conversation_mode)" in script
     assert "generateButton.textContent = 'Loading Models...'" in script
     assert "Models are still loading. Try again in a moment." in script
     assert "if (window.innerWidth <= 768) closeSidebar();" not in script

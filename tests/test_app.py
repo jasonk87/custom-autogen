@@ -101,7 +101,7 @@ async def test_scenario_generate_input_validation(client, scenario, model, num_a
 
 async def test_scenario_generate_success(client):
     with mock.patch('app.server.generate_agents_from_scenario') as mock_generate:
-        mock_generate.return_value = ([{"name": "Agent1"}], "Suggested Goal")
+        mock_generate.return_value = ([{"name": "Agent1"}], "Suggested Goal", "execution")
         resp = await client.post("/api/scenario/generate", json={
             "scenario": "create a website",
             "model": "gemini-pro",
@@ -111,13 +111,14 @@ async def test_scenario_generate_success(client):
         data = await resp.get_json()
         assert data.get("agents") == [{"name": "Agent1"}]
         assert data.get("goal") == "Suggested Goal"
+        assert data.get("conversation_mode") == "execution"
         mock_generate.assert_called_once_with("create a website", "gemini-pro", 2, "discussion")
 
 
 @pytest.mark.parametrize("model", [None, ""])
 async def test_scenario_generate_defaults_missing_or_empty_model(client, model):
     with mock.patch("app.server.generate_agents_from_scenario") as mock_generate:
-        mock_generate.return_value = ([{"name": "Agent1"}], "Suggested Goal")
+        mock_generate.return_value = ([{"name": "Agent1"}], "Suggested Goal", "discussion")
         resp = await client.post(
             "/api/scenario/generate",
             json={"scenario": "create a website", "model": model, "num_agents": 2},
@@ -127,21 +128,23 @@ async def test_scenario_generate_defaults_missing_or_empty_model(client, model):
     mock_generate.assert_called_once_with("create a website", DEFAULT_MODEL, 2, "discussion")
 
 
-async def test_scenario_idea_defaults_empty_model(client):
+async def test_scenario_idea_uses_flash_lite_regardless_of_selected_model(client):
     with mock.patch("app.server.generate_scenario_idea") as mock_generate:
         mock_generate.return_value = "A treasure hunt inside a drifting space station."
-        resp = await client.post("/api/scenario/idea", json={"model": ""})
+        resp = await client.post("/api/scenario/idea", json={"model": "gemini::cloud::gemini-2.5-pro"})
 
     assert resp.status_code == 200
     assert (await resp.get_json())["scenario"] == "A treasure hunt inside a drifting space station."
-    mock_generate.assert_awaited_once_with(DEFAULT_MODEL)
+    mock_generate.assert_awaited_once_with("gemini::cloud::gemini-2.5-flash-lite")
 
 
-async def test_scenario_idea_rejects_non_string_model(client):
-    resp = await client.post("/api/scenario/idea", json={"model": 123})
+async def test_scenario_idea_ignores_invalid_selected_model(client):
+    with mock.patch("app.server.generate_scenario_idea") as mock_generate:
+        mock_generate.return_value = "A quick scenario idea."
+        resp = await client.post("/api/scenario/idea", json={"model": 123})
 
-    assert resp.status_code == 400
-    assert (await resp.get_json())["error_code"] == "invalid_model_input"
+    assert resp.status_code == 200
+    mock_generate.assert_awaited_once_with("gemini::cloud::gemini-2.5-flash-lite")
 
 
 async def test_api_models_returns_cloud_catalog_without_waiting_for_ollama(client):
@@ -176,7 +179,7 @@ async def test_scenario_generate_retries_transient_provider_error(client):
     ):
         mock_generate.side_effect = [
             RuntimeError("503 UNAVAILABLE: model is experiencing high demand"),
-            ([{"name": "Agent1"}], "Suggested Goal"),
+            ([{"name": "Agent1"}], "Suggested Goal", "discussion"),
         ]
         resp = await client.post("/api/scenario/generate", json={
             "scenario": "create a website",

@@ -44,6 +44,7 @@ app = Quart(
 )
 SCENARIO_GENERATION_ATTEMPTS = 3
 SCENARIO_GENERATION_RETRY_DELAY_SECONDS = 0.75
+SCENARIO_IDEA_MODEL = "gemini::cloud::gemini-2.5-flash-lite"
 
 
 def _is_production() -> bool:
@@ -328,13 +329,13 @@ async def scenario_generate():
     try:
         for attempt in range(1, SCENARIO_GENERATION_ATTEMPTS + 1):
             try:
-                agents, suggested_goal = await generate_agents_from_scenario(
+                agents, suggested_goal, suggested_mode = await generate_agents_from_scenario(
                     scenario,
                     model,
                     num_agents,
                     conversation_mode,
                 )
-                return jsonify({"agents": agents, "goal": suggested_goal})
+                return jsonify({"agents": agents, "goal": suggested_goal, "conversation_mode": suggested_mode})
             except Exception as e:
                 if not _is_transient_provider_error(e) or attempt == SCENARIO_GENERATION_ATTEMPTS:
                     raise
@@ -378,12 +379,8 @@ async def scenario_generate():
 
 @app.post("/api/scenario/idea")
 async def scenario_idea():
-    data = await request.get_json() or {}
-    model = data.get("model") or DEFAULT_MODEL
-    if not isinstance(model, str):
-        return jsonify(OrchestratorError("Invalid model selection.", "Model is not a string.", "invalid_model_input").to_payload()), 400
     try:
-        idea = await generate_scenario_idea(model)
+        idea = await generate_scenario_idea(SCENARIO_IDEA_MODEL)
         return jsonify({"scenario": idea})
     except Exception as e:
         log.error("failed_to_generate_scenario_idea", extra={"error": str(e)}, exc_info=e)

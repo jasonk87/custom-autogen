@@ -2,7 +2,7 @@ import json
 import keyword
 import random
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 from pydantic import BaseModel, Field
 from autogen_core.models import UserMessage
 from app.config import DEFAULT_MODEL
@@ -32,6 +32,14 @@ SCENARIO_IDEA_CUES = [
     "a community problem that forces difficult tradeoffs",
     "an ambitious creative project with conflicting personalities",
 ]
+CONVERSATION_MODES = {
+    "discussion",
+    "debate",
+    "brainstorm",
+    "execution",
+    "simulation",
+    "storybook",
+}
 
 
 def _strip_json_fence(content: str) -> str:
@@ -43,6 +51,44 @@ def _strip_json_fence(content: str) -> str:
         if text.endswith("```"):
             text = text[:-3]
     return text.strip()
+
+
+def _normalize_conversation_mode(mode: Any) -> str:
+    normalized = str(mode or "discussion").strip().lower()
+    return normalized if normalized in CONVERSATION_MODES else "discussion"
+
+
+def _infer_conversation_mode(scenario: str, suggested_mode: Any) -> str:
+    normalized = _normalize_conversation_mode(suggested_mode)
+    if normalized != "discussion":
+        return normalized
+
+    text = (scenario or "").lower()
+    signals = [
+        ("debate", (" debate ", "argue whether", "defend opposing", "opposing positions", "counterargument")),
+        ("brainstorm", ("brainstorm", "generate ideas", "come up with ideas", "creative possibilities", "pitch ideas")),
+        ("execution", ("build ", "implement ", "write code", "create a plan", "produce a report", "design and develop")),
+        ("storybook", ("storybook", "tell a story", "narrative", "advance the plot", "chapter")),
+        (
+            "simulation",
+            (
+                "survive",
+                "survival",
+                "stranded",
+                "damaged starship",
+                "emergency crew",
+                "ration supplies",
+                "treat injuries",
+                "remain immersed",
+                "roleplay",
+            ),
+        ),
+    ]
+    padded_text = f" {text} "
+    for mode, markers in signals:
+        if any(marker in padded_text for marker in markers):
+            return mode
+    return normalized
 
 
 def _normalize_agent_names(agents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -115,7 +161,7 @@ async def generate_agents_from_scenario(
     model: str,
     num_agents: int = 3,
     conversation_mode: str = "discussion",
-) -> List[Dict[str, Any]]:
+) -> Tuple[List[Dict[str, Any]], str, str]:
     """
     Generates a list of agents from a scenario description using an LLM
     with structured output (JSON schema).
@@ -192,7 +238,20 @@ And the following team of agents that has been created:
 
 Please generate a single, concise, and actionable "Team Goal" for this team to accomplish.
 The goal should be a clear instruction that can be given to the team to start their work.
-Please only output the goal as a single string in the following JSON format: {{"goal": "the goal"}}
+Also infer the best conversation mode from the scenario's intent. Choose exactly one:
+- discussion: natural open-ended conversation and collaboration
+- debate: competing viewpoints should challenge and defend positions
+- brainstorm: prioritize generating many creative ideas
+- execution: produce concrete work, plans, research, code, or deliverables
+- simulation: agents should remain immersed as participants in a realistic scenario
+- storybook: prioritize an evolving entertaining narrative
+
+Use simulation for survival, emergency, expedition, crew, family, workplace, or other scenarios where
+agents are expected to act as participants inside the situation. Use discussion only when no more specific
+interaction style clearly fits.
+
+Please only output JSON in this format:
+{{"goal": "the goal", "conversation_mode": "discussion"}}
 """
 
     # For the goal, we still expect JSON because we set response_format={"type": "json_object"} on the client.
@@ -203,7 +262,9 @@ Please only output the goal as a single string in the following JSON format: {{"
     try:
         goal_data = json.loads(_strip_json_fence(goal_response.content))
         suggested_goal = goal_data.get("goal", "")
+        suggested_mode = _infer_conversation_mode(scenario, goal_data.get("conversation_mode"))
     except Exception:
         suggested_goal = goal_response.content.strip()
+        suggested_mode = "discussion"
 
-    return agents, suggested_goal
+    return agents, suggested_goal, suggested_mode

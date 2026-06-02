@@ -979,7 +979,7 @@ async function rollScenarioIdea() {
     const r = await fetch('/api/scenario/idea', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: $('#model').value })
+      body: JSON.stringify({})
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.user_message || d.error || 'Idea generation failed.');
@@ -1327,6 +1327,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       agents = normalizeAgents(d.agents);
       if (d.goal) $('#goal').value = d.goal;
+      if (d.conversation_mode) {
+        $('#conversation-mode').value = normalizeConversationMode(d.conversation_mode);
+        updateConversationModeHint();
+      }
       renderTeam();
       saveSession();
     } catch (e) {
