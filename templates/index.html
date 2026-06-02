@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Custom Agent Studio - v11</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=18" />
+  <link rel="stylesheet" href="/static/css/style.css?v=19" />
 </head>
 <body>
   <div class="app">
@@ -36,16 +36,10 @@
           <div class="scenario-card-header">
             <div>Scenario</div>
             <button id="random-scenario" class="btn btn-neutral dice-button" type="button" title="Generate a random scenario idea" aria-label="Generate a random scenario idea" disabled>
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <rect x="4" y="4" width="16" height="16" rx="3"></rect>
-                <circle cx="9" cy="9" r="1"></circle>
-                <circle cx="15" cy="9" r="1"></circle>
-                <circle cx="12" cy="12" r="1"></circle>
-                <circle cx="9" cy="15" r="1"></circle>
-                <circle cx="15" cy="15" r="1"></circle>
-              </svg>
+              <span class="dice-glyph" aria-hidden="true">&#x2684;</span>
             </button>
           </div>
+          <div id="scenario-idea-status" class="scenario-idea-status">Tap the dice for a quick random idea.</div>
           <textarea id="scenario" placeholder="Describe the task..."></textarea>
           <div class="row" style="margin-top:12px; align-items:end;">
             <div class="group" style="margin:0;">
@@ -310,6 +304,6 @@
     </div>
   </div>
 
-  <script src="/static/js/main.js?v=38"></script>
+  <script src="/static/js/main.js?v=39"></script>
 </body>
 </html>

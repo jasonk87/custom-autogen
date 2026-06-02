@@ -967,9 +967,14 @@ async function loadOllamaSettings() {
 
 async function rollScenarioIdea() {
   const button = $('#random-scenario');
+  const status = $('#scenario-idea-status');
   if (!button || button.disabled) return;
   button.disabled = true;
   button.classList.add('rolling');
+  if (status) {
+    status.textContent = 'Generating a fresh idea...';
+    status.classList.add('generating');
+  }
   try {
     const r = await fetch('/api/scenario/idea', {
       method: 'POST',
@@ -985,11 +990,14 @@ async function rollScenarioIdea() {
     $('#goal').value = '';
     renderTeam();
     saveSession();
+    if (status) status.textContent = 'New idea ready. Tap the dice again to explore another.';
   } catch (e) {
     toast(e.message || 'Failed to generate a scenario idea.');
+    if (status) status.textContent = 'Idea generation failed. Tap the dice to try again.';
   } finally {
     button.disabled = false;
     button.classList.remove('rolling');
+    if (status) status.classList.remove('generating');
   }
 }
 

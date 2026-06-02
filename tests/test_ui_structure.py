@@ -46,6 +46,8 @@ async def test_index_html_structure():
     assert 'id="random-scenario"' in html
     assert 'aria-label="Generate a random scenario idea"' in html
     assert 'aria-label="Generate a random scenario idea" disabled>' in html
+    assert 'class="dice-glyph"' in html
+    assert 'id="scenario-idea-status"' in html
 
     # Check that Ollama settings are gone
     assert 'Ollama Base URL' not in html
@@ -91,6 +93,8 @@ def test_stream_errors_reconnect_to_active_run():
     assert "fetch('/api/scenario/idea'" in script
     assert "$('#random-scenario').onclick = rollScenarioIdea" in script
     assert "$('#random-scenario').disabled = false;" in script
+    assert "Generating a fresh idea..." in script
+    assert "New idea ready. Tap the dice again to explore another." in script
     assert "function renderEmptyChat()" in script
     assert "async function loadOllamaModels(cloudModels, selectedModel)" in script
     assert "fetch('/api/models/ollama')" in script
