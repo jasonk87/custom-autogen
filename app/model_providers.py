@@ -1,4 +1,5 @@
 import json
+import asyncio
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -119,12 +120,15 @@ async def _fetch_ollama_catalog(base_url: str, source: str, label_prefix: str, i
     ]
 
 
-async def get_available_models() -> List[Dict[str, str]]:
-    catalog = [
+def get_cloud_models() -> List[Dict[str, str]]:
+    return [
         _build_model_entry(model=name, provider="gemini", source="cloud", label_prefix="$", icon="gemini")
         for name in GEMINI_MODELS
     ]
 
+
+async def get_ollama_models() -> List[Dict[str, str]]:
+    catalog = []
     settings = load_user_settings()
     local_url = settings.get("ollama_local_url", "http://127.0.0.1:11434").strip()
     remote_url = settings.get("ollama_remote_url", "http://192.168.86.30:11434").strip()
@@ -135,13 +139,22 @@ async def get_available_models() -> List[Dict[str, str]]:
     if remote_url:
         sources.append((remote_url, "remote", "Remote"))
 
-    for base_url, source, prefix in sources:
+    async def fetch_source(base_url: str, source: str, prefix: str) -> List[Dict[str, str]]:
         try:
-            catalog.extend(await _fetch_ollama_catalog(base_url, source, prefix, "cloud" if source == "remote" else "server"))
+            return await _fetch_ollama_catalog(base_url, source, prefix, "cloud" if source == "remote" else "server")
         except Exception:
-            continue
+            return []
+
+    if sources:
+        results = await asyncio.gather(*(fetch_source(*source) for source in sources))
+        for result in results:
+            catalog.extend(result)
 
     return catalog
+
+
+async def get_available_models() -> List[Dict[str, str]]:
+    return [*get_cloud_models(), *(await get_ollama_models())]
 
 
 def get_model_client(selection: Optional[str], temperature: float = 0.3, response_format: Any = None):

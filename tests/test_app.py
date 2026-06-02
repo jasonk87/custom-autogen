@@ -8,9 +8,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.server import _run_orchestrator_thread, app
-from app.state import state
+from app.state import ReplayEventBuffer, state
 from app.core import OrchestratorError, run_orchestrator
-from app.config import MAX_UPLOAD_BYTES, ALLOWED_UPLOAD_MIMES, SESSIONS_DIR, WORKSPACE_DIR
+from app.config import DEFAULT_MODEL, MAX_UPLOAD_BYTES, ALLOWED_UPLOAD_MIMES, SESSIONS_DIR, WORKSPACE_DIR
 import os
 import shutil
 from werkzeug.datastructures import FileStorage
@@ -33,6 +33,11 @@ async def client():
 def setup_test_environment(tmp_path):
     # Ensure a clean state for each test
     state.active_workspace = str(tmp_path)
+    state.active_workspace_session = None
+    state.active_workspace_persistent = False
+    managed_root = Path(WORKSPACE_DIR) / "sessions"
+    managed_root.mkdir(parents=True, exist_ok=True)
+    existing_managed_workspaces = {item.name for item in managed_root.iterdir() if item.is_dir()}
     if os.path.exists(SESSIONS_DIR):
         shutil.rmtree(SESSIONS_DIR)
     os.makedirs(SESSIONS_DIR, exist_ok=True)
@@ -40,6 +45,9 @@ def setup_test_environment(tmp_path):
     # Clean up after tests
     if os.path.exists(SESSIONS_DIR):
         shutil.rmtree(SESSIONS_DIR)
+    for item in managed_root.iterdir():
+        if item.is_dir() and item.name not in existing_managed_workspaces:
+            shutil.rmtree(item)
 
 async def test_agent_run_smoke(client):
     """
@@ -87,8 +95,6 @@ async def test_coach_input_rejects_empty_message(client):
     (None, "gemini-pro", 3, 400, "invalid_scenario_input"),
     ("", "gemini-pro", 3, 400, "invalid_scenario_input"),
     (123, "gemini-pro", 3, 400, "invalid_scenario_input"),
-    ("test scenario", None, 3, 400, "invalid_model_input"),
-    ("test scenario", "", 3, 400, "invalid_model_input"),
     ("test scenario", 123, 3, 400, "invalid_model_input"),
     ("test scenario", "gemini-pro", "abc", 400, "invalid_num_agents_input"),
     ("test scenario", "gemini-pro", 0, 400, "invalid_num_agents_input"),
@@ -103,7 +109,7 @@ async def test_scenario_generate_input_validation(client, scenario, model, num_a
 
 async def test_scenario_generate_success(client):
     with mock.patch('app.server.generate_agents_from_scenario') as mock_generate:
-        mock_generate.return_value = ([{"name": "Agent1"}], "Suggested Goal")
+        mock_generate.return_value = ([{"name": "Agent1"}], "Suggested Goal", "execution")
         resp = await client.post("/api/scenario/generate", json={
             "scenario": "create a website",
             "model": "gemini-pro",
@@ -113,7 +119,106 @@ async def test_scenario_generate_success(client):
         data = await resp.get_json()
         assert data.get("agents") == [{"name": "Agent1"}]
         assert data.get("goal") == "Suggested Goal"
-        mock_generate.assert_called_once_with("create a website", "gemini-pro", 2)
+        assert data.get("conversation_mode") == "execution"
+        mock_generate.assert_called_once_with("create a website", "gemini-pro", 2, "discussion")
+
+
+@pytest.mark.parametrize("model", [None, ""])
+async def test_scenario_generate_defaults_missing_or_empty_model(client, model):
+    with mock.patch("app.server.generate_agents_from_scenario") as mock_generate:
+        mock_generate.return_value = ([{"name": "Agent1"}], "Suggested Goal", "discussion")
+        resp = await client.post(
+            "/api/scenario/generate",
+            json={"scenario": "create a website", "model": model, "num_agents": 2},
+        )
+
+    assert resp.status_code == 200
+    mock_generate.assert_called_once_with("create a website", DEFAULT_MODEL, 2, "discussion")
+
+
+async def test_scenario_idea_uses_flash_lite_regardless_of_selected_model(client):
+    with mock.patch("app.server.generate_scenario_idea") as mock_generate:
+        mock_generate.return_value = ("A treasure hunt inside a drifting space station.", 4)
+        resp = await client.post("/api/scenario/idea", json={"model": "gemini::cloud::gemini-2.5-pro"})
+
+    assert resp.status_code == 200
+    assert (await resp.get_json())["scenario"] == "A treasure hunt inside a drifting space station."
+    assert (await resp.get_json())["num_agents"] == 4
+    mock_generate.assert_awaited_once_with("gemini::cloud::gemini-2.5-flash-lite")
+
+
+async def test_scenario_idea_ignores_invalid_selected_model(client):
+    with mock.patch("app.server.generate_scenario_idea") as mock_generate:
+        mock_generate.return_value = ("A quick scenario idea.", 2)
+        resp = await client.post("/api/scenario/idea", json={"model": 123})
+
+    assert resp.status_code == 200
+    mock_generate.assert_awaited_once_with("gemini::cloud::gemini-2.5-flash-lite")
+
+
+async def test_api_models_returns_cloud_catalog_without_waiting_for_ollama(client):
+    with (
+        mock.patch("app.server.get_cloud_models", return_value=[{"value": "gemini::cloud::fast"}]) as cloud,
+        mock.patch("app.server.get_ollama_models") as ollama,
+    ):
+        resp = await client.get("/api/models")
+
+    assert resp.status_code == 200
+    assert await resp.get_json() == [{"value": "gemini::cloud::fast"}]
+    cloud.assert_called_once_with()
+    ollama.assert_not_called()
+
+
+async def test_api_ollama_models_returns_background_catalog(client):
+    with mock.patch(
+        "app.server.get_ollama_models",
+        new=mock.AsyncMock(return_value=[{"value": "ollama::local::llama"}]),
+    ) as ollama:
+        resp = await client.get("/api/models/ollama")
+
+    assert resp.status_code == 200
+    assert await resp.get_json() == [{"value": "ollama::local::llama"}]
+    ollama.assert_awaited_once_with()
+
+
+async def test_scenario_generate_retries_transient_provider_error(client):
+    with (
+        mock.patch('app.server.generate_agents_from_scenario') as mock_generate,
+        mock.patch('app.server.asyncio.sleep', new=mock.AsyncMock()) as mock_sleep,
+    ):
+        mock_generate.side_effect = [
+            RuntimeError("503 UNAVAILABLE: model is experiencing high demand"),
+            ([{"name": "Agent1"}], "Suggested Goal", "discussion"),
+        ]
+        resp = await client.post("/api/scenario/generate", json={
+            "scenario": "create a website",
+            "model": "gemini-pro",
+            "num_agents": 1,
+        })
+
+    assert resp.status_code == 200
+    assert (await resp.get_json())["goal"] == "Suggested Goal"
+    assert mock_generate.await_count == 2
+    mock_sleep.assert_awaited_once()
+
+
+async def test_scenario_generate_reports_exhausted_transient_provider_error(client):
+    with (
+        mock.patch('app.server.generate_agents_from_scenario') as mock_generate,
+        mock.patch('app.server.asyncio.sleep', new=mock.AsyncMock()),
+    ):
+        mock_generate.side_effect = RuntimeError("503 UNAVAILABLE: model is experiencing high demand")
+        resp = await client.post("/api/scenario/generate", json={
+            "scenario": "create a website",
+            "model": "gemini-pro",
+            "num_agents": 1,
+        })
+
+    assert resp.status_code == 503
+    payload = await resp.get_json()
+    assert payload["error_code"] == "model_temporarily_unavailable"
+    assert mock_generate.await_count == 3
+
 
 async def test_scenario_generate_orchestrator_error(client):
     with mock.patch('app.server.generate_agents_from_scenario') as mock_generate:
@@ -258,6 +363,135 @@ async def test_run_orchestrator_thread_unexpected_error(client):
         assert payload.get("error_code") == "orchestrator_error"
         assert "unexpected error" in payload.get("user_message").lower()
         assert q.get_nowait() == "[DONE]"
+
+
+async def test_run_orchestrator_thread_forwards_conversation_mode(client):
+    q = queue.Queue()
+    with (
+        mock.patch("app.server.run_orchestrator", return_value="orchestrator-call") as mock_run,
+        mock.patch("app.server.asyncio.run") as mock_asyncio_run,
+    ):
+        _run_orchestrator_thread("", "", [], "auto", q, 1, "off", "", 0.3, True, "execution")
+
+    assert mock_run.call_args.args[-1] == "execution"
+    mock_asyncio_run.assert_called_once()
+    mock_asyncio_run.call_args.args[0].close()
+
+
+async def test_stream_rejects_second_connection_while_run_is_active(client):
+    with mock.patch("app.server.state.start", side_effect=RuntimeError("already active")):
+        resp = await client.get("/stream?run_token=reconnect-token")
+
+    assert resp.status_code == 409
+    payload = await resp.get_json()
+    assert payload["error_code"] == "run_already_active"
+
+
+async def test_stream_reconnect_replays_buffer_without_starting_new_run(client):
+    buffer = ReplayEventBuffer()
+    buffer.put(json.dumps({"type": "chat", "sender": "Agent", "message": "missed update"}))
+    buffer.put("[DONE]")
+    with (
+        mock.patch("app.server.state.reconnect_buffer", return_value=buffer),
+        mock.patch("app.server.state.start") as mock_start,
+    ):
+        resp = await client.get("/stream?run_token=active-token")
+
+    assert resp.status_code == 200
+    content = (await resp.get_data()).decode("utf-8")
+    assert "id: 1" in content
+    assert "missed update" in content
+    assert "id: 2" in content
+    assert "[DONE]" in content
+    mock_start.assert_not_called()
+
+
+async def test_stream_reconnect_resumes_after_last_event_id(client):
+    buffer = ReplayEventBuffer()
+    buffer.put(json.dumps({"type": "chat", "sender": "Agent", "message": "already seen"}))
+    buffer.put(json.dumps({"type": "chat", "sender": "Agent", "message": "missed update"}))
+    buffer.put("[DONE]")
+    with mock.patch("app.server.state.reconnect_buffer", return_value=buffer):
+        resp = await client.get(
+            "/stream?run_token=active-token",
+            headers={"Last-Event-ID": "1"},
+        )
+
+    content = (await resp.get_data()).decode("utf-8")
+    assert "already seen" not in content
+    assert "id: 2" in content
+    assert "missed update" in content
+    assert "id: 3" in content
+    assert "[DONE]" in content
+
+
+async def test_stream_resume_only_does_not_start_missing_run(client):
+    with mock.patch("app.server.state.start") as mock_start:
+        resp = await client.get("/stream?run_token=stale-token&resume_only=true")
+
+    assert resp.status_code == 404
+    payload = await resp.get_json()
+    assert payload["error_code"] == "run_not_found"
+    mock_start.assert_not_called()
+
+
+async def test_run_status_reports_buffer_availability(client):
+    buffer = ReplayEventBuffer()
+    with mock.patch("app.server.state.reconnect_buffer", return_value=buffer):
+        resp = await client.get("/api/run/status?run_token=active-token")
+
+    assert resp.status_code == 200
+    assert (await resp.get_json())["available"] is True
+
+
+async def test_resume_run_restarts_stopped_simulation_with_transcript(client):
+    buffer = ReplayEventBuffer()
+    buffer.put(json.dumps({"type": "chat", "sender": "Researcher", "message": "Found the water source."}))
+    previous_args = ("Find water.", "model", [], "round_robin", buffer, 5, "off", "", 0.3, False, "simulation")
+    with (
+        mock.patch(
+            "app.server.state.prepare_resume",
+            return_value=(mock.sentinel.target, previous_args, buffer, "Researcher: Found the water source."),
+        ),
+        mock.patch("app.server.state.start") as mock_start,
+    ):
+        resp = await client.post("/api/run/resume", json={"run_token": "stopped-token"})
+
+    assert resp.status_code == 200
+    resumed_args = mock_start.call_args.args[1]
+    assert "Resume the existing simulation" in resumed_args[0]
+    assert "Researcher: Found the water source." in resumed_args[0]
+    assert resumed_args[4] is buffer
+    assert any("Simulation resumed." in item for _, item in buffer.read_after(0, timeout=0))
+
+
+async def test_resume_run_rejects_missing_stopped_simulation(client):
+    with mock.patch("app.server.state.prepare_resume", side_effect=RuntimeError("missing")):
+        resp = await client.post("/api/run/resume", json={"run_token": "missing-token"})
+
+    assert resp.status_code == 409
+    assert (await resp.get_json())["error_code"] == "run_not_resumable"
+
+
+def test_replay_event_buffer_reads_only_events_after_cursor():
+    buffer = ReplayEventBuffer()
+    buffer.put("first")
+    buffer.put("second")
+    assert buffer.read_after(0, timeout=0) == [(1, "first"), (2, "second")]
+    assert buffer.read_after(1, timeout=0) == [(2, "second")]
+
+
+def test_replay_event_buffer_copies_transcript_without_done_marker():
+    buffer = ReplayEventBuffer()
+    buffer.put(json.dumps({"type": "chat", "sender": "Agent", "message": "Continue from here."}))
+    buffer.put("[DONE]")
+    copy = buffer.copy_without_done()
+
+    assert copy.read_after(0, timeout=0) == [
+        (1, json.dumps({"type": "chat", "sender": "Agent", "message": "Continue from here."}))
+    ]
+    assert buffer.chat_transcript() == "Agent: Continue from here."
+
 
 # --- New tests for /api/workspace/upload ---
 
@@ -615,6 +849,36 @@ async def test_sessions_activate_success(client):
     assert data.get("workspace") == expected_path
     assert state.active_workspace == expected_path
 
+
+async def test_scenario_workspace_activation_replaces_disposable_workspace(client):
+    first = await client.post("/api/workspace/scenario", json={})
+    assert first.status_code == 200
+    first_data = await first.get_json()
+    first_path = Path(first_data["workspace"])
+    (first_path / "draft.txt").write_text("temporary", encoding="utf-8")
+
+    second = await client.post("/api/workspace/scenario", json={})
+    assert second.status_code == 200
+    second_data = await second.get_json()
+
+    assert second_data["workspace_session"] != first_data["workspace_session"]
+    assert not first_path.exists()
+    assert Path(second_data["workspace"]).exists()
+
+
+async def test_saved_scenario_retains_active_workspace(client):
+    activated = await client.post("/api/workspace/scenario", json={})
+    workspace = await activated.get_json()
+    resp = await client.post(
+        "/api/sessions",
+        json={"name": "retained", "artifact_type": "scenario", "agents": [{"name": "A"}]},
+    )
+
+    assert resp.status_code == 201
+    saved = json.loads((Path(SESSIONS_DIR) / "scenario_retained.json").read_text(encoding="utf-8"))
+    assert saved["workspace_session"] == workspace["workspace_session"]
+    assert state.active_workspace_persistent is True
+
 # --- New tests for /api/sessions (GET) ---
 
 async def test_sessions_list_not_found(client):
@@ -703,6 +967,35 @@ async def test_sessions_save_success(client):
     data = await resp.get_json()
     assert data.get("ok") is True
     assert os.path.exists(os.path.join(SESSIONS_DIR, f"{session_name}.json"))
+
+async def test_sessions_save_typed_artifacts_do_not_overwrite_each_other(client):
+    shared_name = "support_team"
+    scenario = {
+        "name": shared_name,
+        "artifact_type": "scenario",
+        "scenario": "Handle a billing escalation.",
+        "goal": "Resolve the billing issue.",
+        "agents": [{"name": "BillingLead"}],
+    }
+    group = {
+        "name": shared_name,
+        "artifact_type": "group",
+        "agents": [{"name": "BillingLead"}],
+    }
+
+    scenario_resp = await client.post("/api/sessions", json=scenario)
+    group_resp = await client.post("/api/sessions", json=group)
+
+    assert scenario_resp.status_code == 201
+    assert group_resp.status_code == 201
+    assert os.path.exists(os.path.join(SESSIONS_DIR, "scenario_support_team.json"))
+    assert os.path.exists(os.path.join(SESSIONS_DIR, "group_support_team.json"))
+
+async def test_sessions_save_rejects_invalid_artifact_type(client):
+    resp = await client.post("/api/sessions", json={"name": "bad", "artifact_type": "unknown"})
+    assert resp.status_code == 400
+    data = await resp.get_json()
+    assert data.get("error_code") == "invalid_artifact_type"
 
 # --- New tests for /api/sessions/<path:name> (DELETE) ---
 

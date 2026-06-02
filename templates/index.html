@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Custom Agent Studio - v11</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=15" />
+  <link rel="stylesheet" href="/static/css/style.css?v=19" />
 </head>
 <body>
   <div class="app">
@@ -14,7 +14,7 @@
       <header>
         <h1>Agent Studio</h1>
         <div style="display:flex; gap:8px; align-items:center;">
-          <button id="sessions" class="btn btn-neutral" style="padding:4px 8px; font-size:11px;">Sessions</button>
+          <button id="sessions" class="btn btn-neutral" style="padding:4px 8px; font-size:11px;">Library</button>
           <button id="sidebar-close-mobile" class="btn btn-neutral mobile-only" style="padding:4px; border:none; background:transparent; color:var(--muted); display:none;">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -33,14 +33,20 @@
 
       <section id="setup">
         <div class="card">
-          <div style="font-weight:600; margin-bottom:8px; font-size:13px; color:var(--text)">Scenario</div>
+          <div class="scenario-card-header">
+            <div>Scenario</div>
+            <button id="random-scenario" class="btn btn-neutral dice-button" type="button" title="Generate a random scenario idea" aria-label="Generate a random scenario idea" disabled>
+              <span class="dice-glyph" aria-hidden="true">&#x2684;</span>
+            </button>
+          </div>
+          <div id="scenario-idea-status" class="scenario-idea-status">Tap the dice for a quick random idea.</div>
           <textarea id="scenario" placeholder="Describe the task..."></textarea>
           <div class="row" style="margin-top:12px; align-items:end;">
             <div class="group" style="margin:0;">
               <label>Agents</label>
               <input id="num-agents" type="number" min="2" max="10" value="3" />
             </div>
-            <button id="generate-agents" class="btn btn-primary" style="width:100%">Generate Scenario</button>
+            <button id="generate-agents" class="btn btn-primary" style="width:100%" disabled>Loading Models...</button>
           </div>
         </div>
 
@@ -49,15 +55,28 @@
           <textarea id="goal" placeholder="The primary objective..."></textarea>
         </div>
 
+        <div class="group">
+          <label>Conversation Mode</label>
+          <select id="conversation-mode">
+            <option value="discussion">Discussion</option>
+            <option value="debate">Debate</option>
+            <option value="brainstorm">Brainstorm</option>
+            <option value="execution">Execution</option>
+            <option value="simulation">Simulation</option>
+            <option value="storybook">Storybook</option>
+          </select>
+          <small id="conversation-mode-hint" style="color:var(--muted); font-size:11px; line-height:1.5;">Natural multi-agent conversation for exploring a topic.</small>
+        </div>
+
         <details>
           <summary>Advanced Configuration</summary>
           <div class="row" style="margin-top:12px">
             <div class="group">
-              <label>Mode</label>
+              <label>Conversation Orchestration</label>
               <select id="mode">
-                <option>Auto</option>
-                <option>RoundRobin</option>
-                <option>Manual</option>
+                <option value="smart_supervisor">Smart Supervisor</option>
+                <option value="round_robin">Round Robin</option>
+                <option value="manual">Manual</option>
               </select>
             </div>
             <div class="group">
@@ -127,6 +146,10 @@
       </section>
 
       <section id="work" class="hidden">
+        <div class="workspace-context">
+          <span>Scenario workspace</span>
+          <strong id="workspace-session-label">Preparing workspace...</strong>
+        </div>
         <div class="group" style="margin-bottom: 12px;">
           <label>Mount Workspace</label>
           <div class="row2">
@@ -240,6 +263,7 @@
         <div class="status-row">
           <div id="status">Status: Idle</div>
           <button id="stop-run" class="btn btn-danger hidden" type="button">Stop simulation</button>
+          <button id="resume-run" class="btn btn-success hidden" type="button">Resume simulation</button>
         </div>
         <form id="fbform">
           <input id="fb" placeholder="Type message..." disabled autocomplete="off" />
@@ -250,20 +274,26 @@
     </main>
   </div>
 
-  <div id="sessions-modal" class="modal-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:2000; align-items:center; justify-content:center; backdrop-filter:blur(4px);">
-    <div class="card" style="width:min(90%, 500px); padding:24px;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
-        <h2>Sessions</h2>
-        <button id="sessions-close" class="btn btn-neutral">x</button>
-      </div>
-      <div id="sessions-list" style="margin-bottom:20px; max-height:300px; overflow-y:auto; border:1px solid var(--border); border-radius:6px;"></div>
-      <div class="group">
-        <label>Save Current</label>
-        <div class="row2">
-          <input id="session-name" placeholder="Name..." style="flex:1" />
-          <button id="session-save" class="btn btn-primary">Save</button>
+  <div id="sessions-modal" class="modal-overlay" style="display:none;">
+    <div class="library-card">
+      <div class="library-header">
+        <div>
+          <div class="library-kicker">Saved Library</div>
+          <h2>Scenarios and Groups</h2>
+          <p>Reload a complete scenario or reuse a saved agent group with a different task.</p>
         </div>
+        <button id="sessions-close" class="btn btn-neutral" aria-label="Close saved library">x</button>
       </div>
+      <div class="library-save">
+        <label for="session-name">Save current setup</label>
+        <div class="library-save-row">
+          <input id="session-name" placeholder="Name this item..." />
+          <button id="scenario-save" class="btn btn-primary">Save Scenario</button>
+          <button id="group-save" class="btn btn-neutral">Save Group</button>
+        </div>
+        <small>Scenarios include the task, goal, agents, and settings. Groups include agents only.</small>
+      </div>
+      <div id="sessions-list" class="library-list"></div>
     </div>
   </div>
 
@@ -278,6 +308,6 @@
     </div>
   </div>
 
-  <script src="/static/js/main.js?v=17"></script>
+  <script src="/static/js/main.js?v=45"></script>
 </body>
 </html>

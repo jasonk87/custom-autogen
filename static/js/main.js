@@ -5,13 +5,30 @@ let agents = [];
 let streams = {};
 let es = null;
 let runActive = false;
+let runCanResume = false;
 let currentStatus = 'idle';
+let workspaceSession = null;
+let loadedScenarioTranscript = [];
+let reconnectProbeTimer = null;
 const think = { active: false, buffer: '', open: false, minimized: false };
 const playgroundState = { toolNames: [] };
 const SESSION_KEY = 'agentStudioSession';
+const ACTIVE_RUN_URL_KEY = 'agentStudioActiveRunUrl';
 const MODEL_DEFAULT_VERSION_KEY = 'agentStudioModelDefaultVersion';
 const MODEL_DEFAULT_VERSION = 'gemini-2.5-flash-lite-max-thinking-v1';
 const PREFERRED_MODEL = 'gemini::cloud::gemini-2.5-flash-lite';
+const RELATIONSHIP_TYPES = [
+  'Boss', 'Employee', 'Coworker', 'Mentor', 'Student', 'Friend', 'Rival', 'Sibling',
+  'Parent', 'Child', 'Spouse', 'Partner', 'Ally', 'Enemy', 'Trusted', 'Distrusted',
+  'Protector', 'Dependent', 'Advisor', 'Client'
+];
+
+function createRunToken() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+  return `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -128,6 +145,24 @@ function appendChatBox(sender, className = '') {
   return { chat, box };
 }
 
+function renderEmptyChat() {
+  const chat = $('#chat');
+  if (!chat) return;
+  chat.innerHTML = `
+    <div class="chat-empty">
+      <div class="chat-empty-icon" aria-hidden="true">+</div>
+      <div class="chat-empty-kicker">Multi-agent workspace</div>
+      <h2>Build a team for your next task</h2>
+      <p>Describe a scenario, generate specialized agents, and guide their work from one place.</p>
+      <button id="empty-open-setup" class="btn btn-primary" type="button">Open setup</button>
+    </div>
+  `;
+  $('#empty-open-setup').onclick = () => {
+    $('.side').classList.add('open');
+    $('#sidebar-overlay').classList.add('open');
+  };
+}
+
 function addToolRequest(sender, tools) {
   const entry = appendChatBox(sender, 'tool-card tool-request');
   if (!entry) return;
@@ -217,6 +252,87 @@ function humanProxyMode() {
   return $('input[name="human-proxy-mode"]:checked')?.value || 'consult';
 }
 
+function updateWorkspaceLabel() {
+  const label = $('#workspace-session-label');
+  if (label) label.textContent = workspaceSession || 'Custom mounted workspace';
+}
+
+async function activateScenarioWorkspace(savedWorkspaceSession = null, persistent = false) {
+  const r = await fetch('/api/workspace/scenario', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspace_session: savedWorkspaceSession, persistent })
+  });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.user_message || 'Failed to activate scenario workspace.');
+  workspaceSession = d.workspace_session;
+  updateWorkspaceLabel();
+  return d;
+}
+
+function normalizeAgents(rawAgents = []) {
+  const roster = (Array.isArray(rawAgents) ? rawAgents : []).map(agent => ({
+    ...agent,
+    name: String(agent?.name || ''),
+    system: String(agent?.system || ''),
+    temperature: Number.isFinite(Number(agent?.temperature)) ? Number(agent.temperature) : 0.3,
+    tools_enabled: agent?.tools_enabled !== false,
+    relationships: Array.isArray(agent?.relationships) ? agent.relationships : []
+  }));
+  const names = new Set(roster.map(agent => agent.name));
+  roster.forEach(agent => {
+    agent.relationships = agent.relationships
+      .filter(relationship => relationship && typeof relationship === 'object')
+      .map(relationship => ({
+        target: String(relationship.target || ''),
+        relation: String(relationship.relation || '').trim(),
+        notes: String(relationship.notes || '')
+      }))
+      .filter(relationship => relationship.target && relationship.relation && relationship.target !== agent.name && names.has(relationship.target));
+  });
+  return roster;
+}
+
+function relationshipTypeOptions(relation) {
+  const custom = relation && !RELATIONSHIP_TYPES.includes(relation);
+  return [...RELATIONSHIP_TYPES, 'Custom'].map(type => (
+    `<option value='${escapeHtml(type)}' ${type === (custom ? 'Custom' : relation) ? 'selected' : ''}>${escapeHtml(type)}</option>`
+  )).join('');
+}
+
+function relationshipTargetOptions(agentIndex, target) {
+  return agents.map((agent, index) => index === agentIndex ? '' : (
+    `<option value='${escapeHtml(agent.name)}' ${agent.name === target ? 'selected' : ''}>${escapeHtml(agent.name)}</option>`
+  )).join('');
+}
+
+function normalizeManagerMode(mode) {
+  const normalized = String(mode || '').toLowerCase().replace(/[\s_-]/g, '');
+  if (normalized === 'auto' || normalized === 'smartsupervisor') return 'smart_supervisor';
+  if (normalized === 'roundrobin') return 'round_robin';
+  if (normalized === 'manual') return 'manual';
+  return 'smart_supervisor';
+}
+
+function normalizeConversationMode(mode) {
+  const normalized = String(mode || 'discussion').toLowerCase();
+  return ['discussion', 'debate', 'brainstorm', 'execution', 'simulation', 'storybook'].includes(normalized)
+    ? normalized
+    : 'discussion';
+}
+
+function updateConversationModeHint() {
+  const hints = {
+    discussion: 'Natural multi-agent conversation for exploring a topic.',
+    debate: 'Pressure-test ideas with challenges, counterarguments, and productive disagreement.',
+    brainstorm: 'Generate many diverse ideas before spending time on criticism.',
+    execution: 'Focus on concrete deliverables, tool use, and completing the work.',
+    simulation: 'Stay immersed in the scenario and act as real participants.',
+    storybook: 'Advance an engaging narrative with continuity, character, and drama.'
+  };
+  $('#conversation-mode-hint').textContent = hints[normalizeConversationMode($('#conversation-mode').value)];
+}
+
 function setHumanProxyMode(mode) {
   const input = $(`input[name="human-proxy-mode"][value="${mode || 'consult'}"]`);
   if (input) input.checked = true;
@@ -257,12 +373,15 @@ function setStatus(state) {
   if (!status) return;
   const map = {
     idle: 'Status: Idle',
+    paused: 'Status: Simulation paused',
     running: 'Status: Agents working...',
+    supervising: 'Status: Supervisor choosing next speaker...',
     waiting_for_input: 'Status: Waiting for input...',
+    reconnecting: 'Status: Reconnecting...',
     waiting_for_manual_selection: 'Status: Waiting for speaker selection...'
   };
   status.textContent = map[state] || 'Status';
-  status.classList.toggle('pulse', state === 'running');
+  status.classList.toggle('pulse', ['running', 'supervising'].includes(state));
 
   const fb = $('#fb');
   const send = $('#send');
@@ -384,6 +503,7 @@ function renderTeam() {
   const container = $('#team');
   if (!container) return;
 
+  agents = normalizeAgents(agents);
   $('#team-count').textContent = `${agents.length} members`;
   if (!agents.length) {
     container.innerHTML = "<div style='color:var(--muted); padding:12px; border:1px dashed var(--border); border-radius:8px;'>No agents in team.</div>";
@@ -402,23 +522,106 @@ function renderTeam() {
       </div>
       <textarea data-i='${i}' class='sys' placeholder='System Message'>${escapeHtml(a.system)}</textarea>
       <div class='team-item-footer'>
+        <label class='agent-tools-toggle'><input data-i='${i}' class='agent-tools' type='checkbox' ${a.tools_enabled ? 'checked' : ''} /> Allow Tools</label>
         <label>Temp</label>
         <input data-i='${i}' class='num' type='number' min='0' max='2' step='0.1' value='${escapeHtml(a.temperature ?? 0.3)}' />
+      </div>
+      <div class='relationships-panel'>
+        <div class='relationships-header'>
+          <span>Relationships</span>
+          <button data-i='${i}' class='btn btn-neutral relationship-add' type='button'>+ Add Relationship</button>
+        </div>
+        <div class='relationships-list'>
+          ${(a.relationships || []).map((relationship, relationshipIndex) => {
+            const custom = !RELATIONSHIP_TYPES.includes(relationship.relation);
+            return `
+              <div class='relationship-row'>
+                <select data-i='${i}' data-r='${relationshipIndex}' class='relationship-relation' aria-label='Relationship type'>
+                  ${relationshipTypeOptions(relationship.relation)}
+                </select>
+                <select data-i='${i}' data-r='${relationshipIndex}' class='relationship-target' aria-label='Relationship target'>
+                  ${relationshipTargetOptions(i, relationship.target)}
+                </select>
+                <input data-i='${i}' data-r='${relationshipIndex}' class='relationship-custom ${custom ? '' : 'hidden'}' value='${escapeHtml(custom && relationship.relation !== 'Custom' ? relationship.relation : '')}' placeholder='Custom relation...' />
+                <textarea data-i='${i}' data-r='${relationshipIndex}' class='relationship-notes' placeholder='Optional relationship notes...'>${escapeHtml(relationship.notes || '')}</textarea>
+                <button data-i='${i}' data-r='${relationshipIndex}' class='btn btn-danger relationship-remove' type='button' title='Remove relationship'>x</button>
+              </div>
+            `;
+          }).join('')}
+        </div>
       </div>
     </div>
   `).join('');
 
   $$('.name').forEach(el => {
-    el.onchange = () => { agents[+el.dataset.i].name = el.value.trim(); saveSession(); };
+    el.onchange = () => {
+      beginNewSetup();
+      const agent = agents[+el.dataset.i];
+      const oldName = agent.name;
+      agent.name = el.value.trim();
+      agents.forEach(item => item.relationships.forEach(relationship => {
+        if (relationship.target === oldName) relationship.target = agent.name;
+      }));
+      renderTeam();
+      saveSession();
+    };
   });
   $$('.sys').forEach(el => {
-    el.onchange = () => { agents[+el.dataset.i].system = el.value; saveSession(); };
+    el.onchange = () => { beginNewSetup(); agents[+el.dataset.i].system = el.value; saveSession(); };
   });
   $$('.num').forEach(el => {
-    el.onchange = () => { agents[+el.dataset.i].temperature = parseFloat(el.value || '0.3'); saveSession(); };
+    el.onchange = () => { beginNewSetup(); agents[+el.dataset.i].temperature = parseFloat(el.value || '0.3'); saveSession(); };
+  });
+  $$('.agent-tools').forEach(el => {
+    el.onchange = () => { beginNewSetup(); agents[+el.dataset.i].tools_enabled = el.checked; saveSession(); };
+  });
+  $$('.relationship-add').forEach(el => {
+    el.onclick = () => {
+      beginNewSetup();
+      const i = +el.dataset.i;
+      const target = agents.find((_, index) => index !== i)?.name;
+      if (!target) {
+        toast('Add another agent before creating a relationship.');
+        return;
+      }
+      agents[i].relationships.push({ target, relation: 'Coworker', notes: '' });
+      renderTeam();
+      saveSession();
+    };
+  });
+  $$('.relationship-remove').forEach(el => {
+    el.onclick = () => {
+      beginNewSetup();
+      agents[+el.dataset.i].relationships.splice(+el.dataset.r, 1);
+      renderTeam();
+      saveSession();
+    };
+  });
+  $$('.relationship-target').forEach(el => {
+    el.onchange = () => { beginNewSetup(); agents[+el.dataset.i].relationships[+el.dataset.r].target = el.value; saveSession(); };
+  });
+  $$('.relationship-relation').forEach(el => {
+    el.onchange = () => {
+      beginNewSetup();
+      const relationship = agents[+el.dataset.i].relationships[+el.dataset.r];
+      relationship.relation = el.value;
+      renderTeam();
+      saveSession();
+    };
+  });
+  $$('.relationship-custom').forEach(el => {
+    el.oninput = () => {
+      beginNewSetup();
+      agents[+el.dataset.i].relationships[+el.dataset.r].relation = el.value.trim() || 'Custom';
+      saveSession();
+    };
+  });
+  $$('.relationship-notes').forEach(el => {
+    el.oninput = () => { beginNewSetup(); agents[+el.dataset.i].relationships[+el.dataset.r].notes = el.value; saveSession(); };
   });
   $$('.up').forEach(el => {
     el.onclick = () => {
+      beginNewSetup();
       const i = +el.dataset.i;
       if (i <= 0) return;
       [agents[i - 1], agents[i]] = [agents[i], agents[i - 1]];
@@ -428,6 +631,7 @@ function renderTeam() {
   });
   $$('.down').forEach(el => {
     el.onclick = () => {
+      beginNewSetup();
       const i = +el.dataset.i;
       if (i >= agents.length - 1) return;
       [agents[i + 1], agents[i]] = [agents[i], agents[i + 1]];
@@ -437,71 +641,150 @@ function renderTeam() {
   });
   $$('.rm').forEach(el => {
     el.onclick = () => {
+      beginNewSetup();
       agents.splice(+el.dataset.i, 1);
+      agents = normalizeAgents(agents);
       renderTeam();
       saveSession();
     };
   });
 }
 
-function buttons(running) {
+function buttons(running, resumable = false) {
   const actions = $('#actions');
   if (!actions) return;
 
   if (running) {
     actions.innerHTML = "<button id='stop' class='btn btn-danger' style='width:100%'>Stop Task</button>";
     $('#stop').onclick = stopSimulation;
+  } else if (resumable) {
+    actions.innerHTML = `
+      <button id='resume' class='btn btn-success' style='width:100%'>Resume Task</button>
+      <button id='new-task' class='btn btn-neutral' style='width:100%'>New Task</button>
+    `;
+    $('#resume').onclick = resumeSimulation;
+    $('#new-task').onclick = startNewTask;
   } else {
     actions.innerHTML = "<button id='start' class='btn btn-primary' style='width:100%'>Start Task</button>";
     $('#start').onclick = startRun;
   }
   $('#stop-run')?.classList.toggle('hidden', !running);
+  $('#resume-run')?.classList.toggle('hidden', !resumable || running);
+}
+
+function beginNewSetup() {
+  if (runActive || !runCanResume) return;
+  localStorage.removeItem(ACTIVE_RUN_URL_KEY);
+  runCanResume = false;
+  window.__transcript = [];
+  renderEmptyChat();
+  setStatus('idle');
+  buttons(false);
+}
+
+function clearDraftSetup() {
+  localStorage.removeItem(SESSION_KEY);
+  agents = [];
+  $('#scenario').value = '';
+  $('#goal').value = '';
+}
+
+async function startNewTask() {
+  beginNewSetup();
+  clearDraftSetup();
+  loadedScenarioTranscript = [];
+  await activateScenarioWorkspace();
+  renderTeam();
+  renderEmptyChat();
+  closeThinkDock();
+  toast('Ready for a new task.');
 }
 
 async function stopSimulation() {
   if (es) es.close();
   await fetch('/stop', { method: 'POST' });
   runActive = false;
-  setStatus('idle');
-  buttons(false);
+  runCanResume = true;
+  setStatus('paused');
+  buttons(false, true);
   closeThinkDock();
 }
 
-async function startRun() {
-  if (agents.length < 2) {
-    toast('Add at least two agents.');
+async function resumeSimulation() {
+  const url = localStorage.getItem(ACTIVE_RUN_URL_KEY);
+  if (!url) {
+    runCanResume = false;
+    setStatus('idle');
+    buttons(false);
+    toast('No stopped simulation is available to resume.');
     return;
   }
-
+  const reconnectUrl = new URL(url, window.location.origin);
+  const runToken = reconnectUrl.searchParams.get('run_token');
+  const response = await fetch('/api/run/resume', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ run_token: runToken })
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    toast(payload.user_message || 'The simulation is still stopping. Try resume again shortly.');
+    return;
+  }
   $('#chat').innerHTML = '';
+  runCanResume = false;
+  reconnectUrl.searchParams.set('resume_only', 'true');
+  connectRunStream(`${reconnectUrl.pathname}?${reconnectUrl.searchParams.toString()}`);
+}
+
+function connectRunStream(url) {
+  if (es) es.close();
+  if (reconnectProbeTimer) {
+    clearTimeout(reconnectProbeTimer);
+    reconnectProbeTimer = null;
+  }
   runActive = true;
   setStatus('running');
   buttons(true);
-
-  const params = new URLSearchParams({
-    model: $('#model').value,
-    goal: btoa($('#goal').value || ''),
-    agents: btoa(JSON.stringify(agents)),
-    manager_mode: $('#mode').value,
-    turns: $('#turns').value,
-    temperature: $('#temperature').value,
-    allow_tools: $('#allow-tools').checked,
-    human_proxy_mode: humanProxyMode(),
-    human_proxy_preferences: $('#human-proxy-preferences').value
-  });
-
-  es = new EventSource(`/stream?${params.toString()}`);
+  es = new EventSource(url);
   es.onmessage = ev => {
     if (ev.data === '[DONE]') {
       es.close();
       runActive = false;
-      setStatus('idle');
-      buttons(false);
+      if (reconnectProbeTimer) {
+        clearTimeout(reconnectProbeTimer);
+        reconnectProbeTimer = null;
+      }
+      if (runCanResume) {
+        setStatus('paused');
+        buttons(false, true);
+      } else {
+        localStorage.removeItem(ACTIVE_RUN_URL_KEY);
+        setStatus('idle');
+        buttons(false);
+      }
       return;
     }
 
     const d = JSON.parse(ev.data);
-    if (d.type === 'status') setStatus(d.state);
+    if (d.type === 'status') {
+      if (d.state === 'error') {
+        const errMsg = d.user_message || d.message || "Unknown error";
+        toast(`Error: ${errMsg}`);
+        addMsg('System', `**Error:** ${errMsg}`);
+        es.close();
+        localStorage.removeItem(ACTIVE_RUN_URL_KEY);
+        runActive = false;
+        if (reconnectProbeTimer) {
+          clearTimeout(reconnectProbeTimer);
+          reconnectProbeTimer = null;
+        }
+        setStatus('idle');
+        buttons(false);
+      } else {
+        setStatus(d.state);
+      }
+    }
     else if (d.type === 'tool_request') addToolRequest(d.sender, d.tools);
     else if (d.type === 'tool_result') addToolResult(d.sender, d.results);
     else if (d.type === 'chat') {
@@ -512,16 +795,87 @@ async function startRun() {
   };
   es.onerror = () => {
     if (!runActive) return;
-    if (!es || es.readyState === EventSource.CLOSED) {
+    setStatus('reconnecting');
+    if (reconnectProbeTimer) return;
+    reconnectProbeTimer = setTimeout(async () => {
+      reconnectProbeTimer = null;
+      if (!runActive) return;
+      const runToken = new URL(url, window.location.origin).searchParams.get('run_token') || '';
+      try {
+        const response = await fetch(`/api/run/status?run_token=${encodeURIComponent(runToken)}`);
+        if (response.ok) {
+          const status = await response.json();
+          if (status.available || status.running) return;
+        }
+      } catch {
+        // The server is unreachable; clear the stale run state below.
+      }
+      if (es) es.close();
+      localStorage.removeItem(ACTIVE_RUN_URL_KEY);
       runActive = false;
+      runCanResume = false;
+      if (!$('#chat')?.children.length) renderEmptyChat();
       setStatus('idle');
       buttons(false);
-      toast('Stream closed.');
-      return;
-    }
-    // Ignore transient EventSource reconnect events while run is still active.
-    setStatus('running');
+      toast('Lost connection to the simulation. Start a new task when ready.');
+    }, 3500);
   };
+}
+
+async function startRun() {
+  if (agents.length < 2) {
+    toast('Add at least two agents.');
+    return;
+  }
+
+  $('#chat').innerHTML = '';
+  runCanResume = false;
+  const originalGoal = $('#goal').value || '';
+  const continuation = loadedScenarioTranscript.length
+    ? `${originalGoal}\n\nContinue the previously saved scenario from the transcript below. Do not restart introductions or repeat completed work. Continue naturally from the latest point.\n\nSaved transcript:\n${loadedScenarioTranscript.map(item => `${item.from}: ${item.text}`).join('\n\n')}`
+    : originalGoal;
+  const params = new URLSearchParams({
+    model: $('#model').value,
+    goal: btoa(continuation),
+    agents: btoa(JSON.stringify(agents)),
+    manager_mode: $('#mode').value,
+    conversation_mode: $('#conversation-mode').value,
+    turns: $('#turns').value,
+    temperature: $('#temperature').value,
+    allow_tools: $('#allow-tools').checked,
+    human_proxy_mode: humanProxyMode(),
+    human_proxy_preferences: $('#human-proxy-preferences').value,
+    run_token: createRunToken()
+  });
+  const url = `/stream?${params.toString()}`;
+  localStorage.setItem(ACTIVE_RUN_URL_KEY, url);
+  connectRunStream(url);
+}
+
+async function reconnectActiveRun() {
+  const url = localStorage.getItem(ACTIVE_RUN_URL_KEY);
+  if (!url) return false;
+  $('#chat').innerHTML = '';
+  const reconnectUrl = new URL(url, window.location.origin);
+  const runToken = reconnectUrl.searchParams.get('run_token');
+  let status;
+  try {
+    const statusResponse = await fetch(`/api/run/status?run_token=${encodeURIComponent(runToken || '')}`);
+    status = await statusResponse.json();
+  } catch {
+    localStorage.removeItem(ACTIVE_RUN_URL_KEY);
+    return false;
+  }
+  if (!status.available) {
+    localStorage.removeItem(ACTIVE_RUN_URL_KEY);
+    return false;
+  }
+  loadSession();
+  renderTeam();
+  runCanResume = Boolean(status.resumable);
+  reconnectUrl.searchParams.set('resume_only', 'true');
+  connectRunStream(`${reconnectUrl.pathname}?${reconnectUrl.searchParams.toString()}`);
+  return true;
 }
 
 async function showConfirm({ title, message, okText }) {
@@ -539,35 +893,68 @@ async function showConfirm({ title, message, okText }) {
 
 function saveSession() {
   const s = {
+    scenario: $('#scenario').value,
     goal: $('#goal').value,
     agents,
-    settings: {
-      model: $('#model').value,
-      mode: $('#mode').value,
-      turns: $('#turns').value,
-      temperature: $('#temperature').value,
-      allow_tools: $('#allow-tools').checked,
-      human_proxy_mode: humanProxyMode(),
-      human_proxy_preferences: $('#human-proxy-preferences').value
-    }
+    settings: currentRunSettings(),
+    workspace_session: workspaceSession
   };
   localStorage.setItem(SESSION_KEY, JSON.stringify(s));
+}
+
+function currentRunSettings() {
+  return {
+    model: $('#model').value,
+    mode: $('#mode').value,
+    conversation_mode: $('#conversation-mode').value,
+    turns: $('#turns').value,
+    temperature: $('#temperature').value,
+    allow_tools: $('#allow-tools').checked,
+    human_proxy_mode: humanProxyMode(),
+    human_proxy_preferences: $('#human-proxy-preferences').value
+  };
+}
+
+function applyRunSettings(settings = {}) {
+  if (settings.model) $('#model').value = settings.model;
+  if (settings.mode) $('#mode').value = normalizeManagerMode(settings.mode);
+  $('#conversation-mode').value = normalizeConversationMode(settings.conversation_mode);
+  if (settings.turns) $('#turns').value = settings.turns;
+  if (settings.temperature) $('#temperature').value = settings.temperature;
+  if (settings.allow_tools !== undefined) $('#allow-tools').checked = settings.allow_tools;
+  setHumanProxyMode(settings.human_proxy_mode);
+  updateConversationModeHint();
+  if (settings.human_proxy_preferences !== undefined) {
+    $('#human-proxy-preferences').value = settings.human_proxy_preferences;
+  }
 }
 
 function loadSession() {
   const raw = localStorage.getItem(SESSION_KEY);
   if (!raw) return;
-  const s = JSON.parse(raw);
-  agents = s.agents || [];
-  if (s.goal) $('#goal').value = s.goal;
-  if (s.settings) {
-    if (s.settings.mode) $('#mode').value = s.settings.mode;
-    if (s.settings.turns) $('#turns').value = s.settings.turns;
-    if (s.settings.temperature) $('#temperature').value = s.settings.temperature;
-    if (s.settings.allow_tools !== undefined) $('#allow-tools').checked = s.settings.allow_tools;
-    setHumanProxyMode(s.settings.human_proxy_mode);
-    if (s.settings.human_proxy_preferences !== undefined) $('#human-proxy-preferences').value = s.settings.human_proxy_preferences;
+  let s;
+  try {
+    s = JSON.parse(raw);
+  } catch {
+    return;
   }
+  agents = normalizeAgents(s.agents);
+  $('#scenario').value = s.scenario || '';
+  $('#goal').value = s.goal || '';
+  workspaceSession = s.workspace_session || workspaceSession;
+  updateWorkspaceLabel();
+  applyRunSettings(s.settings);
+}
+
+function restoreSavedTranscript(transcript = []) {
+  loadedScenarioTranscript = Array.isArray(transcript) ? transcript : [];
+  window.__transcript = [];
+  if (!loadedScenarioTranscript.length) {
+    renderEmptyChat();
+    return;
+  }
+  $('#chat').innerHTML = '';
+  loadedScenarioTranscript.forEach(item => addMsg(item.from || 'Unknown', item.text || ''));
 }
 
 function getSavedSettings() {
@@ -581,26 +968,9 @@ function getSavedSettings() {
   }
 }
 
-function applySavedSettings() {
-  const settings = getSavedSettings();
-  if (settings.mode) $('#mode').value = settings.mode;
-  if (settings.turns) $('#turns').value = settings.turns;
-  if (settings.temperature) $('#temperature').value = settings.temperature;
-  if (settings.allow_tools !== undefined) $('#allow-tools').checked = settings.allow_tools;
-  setHumanProxyMode(settings.human_proxy_mode);
-  if (settings.human_proxy_preferences !== undefined) $('#human-proxy-preferences').value = settings.human_proxy_preferences;
-}
-
-function clearDraftKeepSettings() {
-  const settings = getSavedSettings();
-  localStorage.setItem(SESSION_KEY, JSON.stringify({ goal: '', agents: [], settings }));
-}
-
-async function loadModels() {
-  const r = await fetch('/api/models');
-  const models = await r.json();
+function renderModelOptions(models, { preserveSelection = false } = {}) {
   const sel = $('#model');
-  
+  const previousSelection = preserveSelection ? sel.value : '';
   const groups = {
     'Google': models.filter(m => m.provider === 'gemini'),
     'Local Ollama': models.filter(m => m.source === 'local'),
@@ -613,10 +983,42 @@ async function loadModels() {
       html += `<optgroup label="${escapeHtml(groupName)}">` + groupModels.map(m => `<option value="${escapeHtml(m.value)}">${escapeHtml(m.label)}</option>`).join('') + `</optgroup>`;
     }
   }
-
   sel.innerHTML = html;
+  if (previousSelection && models.some(model => model.value === previousSelection)) {
+    sel.value = previousSelection;
+  }
+  return sel;
+}
+
+async function loadOllamaModels(cloudModels, selectedModel) {
+  $('#model-hint').textContent = 'Google models ready. Checking Ollama servers in the background...';
+  try {
+    const r = await fetch('/api/models/ollama');
+    const ollamaModels = await r.json();
+    const models = [...cloudModels, ...(Array.isArray(ollamaModels) ? ollamaModels : [])];
+    const sel = renderModelOptions(models, { preserveSelection: true });
+    if (selectedModel && models.some(model => model.value === selectedModel)) sel.value = selectedModel;
+    $('#model-count').textContent = `${models.length}`;
+    $('#model-hint').textContent = ollamaModels.length
+      ? `Loaded ${models.length} model options, including Ollama.`
+      : `Loaded ${models.length} Google model options. No Ollama servers responded.`;
+  } catch {
+    $('#model-hint').textContent = `Loaded ${cloudModels.length} Google model options. Ollama discovery failed.`;
+  }
+}
+
+async function loadModels() {
+  const generateButton = $('#generate-agents');
+  if (generateButton) {
+    generateButton.disabled = true;
+    generateButton.textContent = 'Loading Models...';
+  }
+  $('#model-hint').textContent = 'Loading Google models...';
+  const r = await fetch('/api/models');
+  const models = await r.json();
+  const sel = renderModelOptions(models);
   $('#model-count').textContent = `${models.length}`;
-  $('#model-hint').textContent = models.length ? `Loaded ${models.length} model options.` : 'No models loaded.';
+  $('#model-hint').textContent = models.length ? `Loaded ${models.length} Google model options.` : 'No Google models loaded.';
 
   const savedSettings = getSavedSettings();
   const values = models.map(m => m.value);
@@ -630,6 +1032,11 @@ async function loadModels() {
   } else if (values.length > 0) {
     sel.value = values[0];
   }
+  if (generateButton) {
+    generateButton.disabled = !sel.value;
+    generateButton.textContent = 'Generate Scenario';
+  }
+  void loadOllamaModels(models, sel.value);
 }
 
 async function loadOllamaSettings() {
@@ -638,6 +1045,44 @@ async function loadOllamaSettings() {
     const d = await r.json();
     if ($('#ollama-local-url')) $('#ollama-local-url').value = d.local_url || '';
     if ($('#ollama-remote-url')) $('#ollama-remote-url').value = d.remote_url || '';
+  }
+}
+
+async function rollScenarioIdea() {
+  const button = $('#random-scenario');
+  const status = $('#scenario-idea-status');
+  if (!button || button.disabled) return;
+  button.disabled = true;
+  button.classList.add('rolling');
+  if (status) {
+    status.textContent = 'Generating a fresh idea...';
+    status.classList.add('generating');
+  }
+  try {
+    const r = await fetch('/api/scenario/idea', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.user_message || d.error || 'Idea generation failed.');
+
+    beginNewSetup();
+    await activateScenarioWorkspace();
+    agents = [];
+    $('#scenario').value = d.scenario || '';
+    $('#num-agents').value = d.num_agents || 3;
+    $('#goal').value = '';
+    renderTeam();
+    saveSession();
+    if (status) status.textContent = `New idea ready with ${d.num_agents || 3} suggested agents. Tap the dice again to explore another.`;
+  } catch (e) {
+    toast(e.message || 'Failed to generate a scenario idea.');
+    if (status) status.textContent = 'Idea generation failed. Tap the dice to try again.';
+  } finally {
+    button.disabled = false;
+    button.classList.remove('rolling');
+    if (status) status.classList.remove('generating');
   }
 }
 
@@ -718,27 +1163,28 @@ async function onTreeClick(e) {
   }
 }
 
-async function saveCurrentSessionToServer() {
+async function saveLibraryItem(artifactType) {
   const name = $('#session-name').value.trim();
   if (!name) {
-    toast('Enter a session name.');
+    toast('Enter a name for this saved item.');
+    return;
+  }
+  if (!agents.length) {
+    toast('Add at least one agent before saving.');
     return;
   }
 
   const payload = {
     name,
-    goal: $('#goal').value,
+    artifact_type: artifactType,
     agents,
-    settings: {
-      model: $('#model').value,
-      mode: $('#mode').value,
-      turns: $('#turns').value,
-      temperature: $('#temperature').value,
-      allow_tools: $('#allow-tools').checked,
-      human_proxy_mode: humanProxyMode(),
-      human_proxy_preferences: $('#human-proxy-preferences').value
-    }
   };
+  if (artifactType === 'scenario') {
+    payload.scenario = $('#scenario').value;
+    payload.goal = $('#goal').value;
+    payload.settings = currentRunSettings();
+    payload.transcript = window.__transcript || [];
+  }
 
   const r = await fetch('/api/sessions', {
     method: 'POST',
@@ -747,27 +1193,64 @@ async function saveCurrentSessionToServer() {
   });
 
   if (r.ok) {
-    toast('Session saved.');
+    toast(artifactType === 'group' ? 'Agent group saved.' : 'Scenario saved.');
     $('#session-name').value = '';
     await openSessionsModal();
   } else {
-    toast('Failed to save session.');
+    const d = await r.json().catch(() => ({}));
+    toast(d.user_message || 'Failed to save item.');
   }
+}
+
+function normalizeSavedArtifact(file, payload) {
+  const value = payload?.data && !payload.agents ? payload.data : payload;
+  const artifactType = value?.artifact_type === 'group' ? 'group' : 'scenario';
+  return {
+    file,
+    artifactType,
+    name: value?.name || file.replace(/\.json$/i, ''),
+    payload: value || {}
+  };
+}
+
+function renderSavedLibrary(items) {
+  const list = $('#sessions-list');
+  if (!items.length) {
+    list.innerHTML = "<div class='library-empty'>No saved scenarios or groups yet.</div>";
+    return;
+  }
+  list.innerHTML = items.map(item => {
+    const action = item.artifactType === 'group' ? 'Use Group' : 'Load Scenario';
+    return `
+      <div class='library-item'>
+        <div>
+          <div class='library-item-kind'>${escapeHtml(item.artifactType)}</div>
+          <div class='library-item-name'>${escapeHtml(item.name)}</div>
+        </div>
+        <div class='library-item-actions'>
+          <button class='btn btn-neutral session-load' data-file='${escapeHtml(item.file)}'>${action}</button>
+          <button class='btn btn-danger session-delete' data-file='${escapeHtml(item.file)}'>Delete</button>
+        </div>
+      </div>
+    `;
+  }).join('');
 }
 
 async function openSessionsModal() {
   $('#sessions-modal').style.display = 'flex';
   const r = await fetch('/api/sessions');
   const sessions = await r.json();
-  $('#sessions-list').innerHTML = sessions.map(s => `
-    <div style='padding:10px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between;'>
-      <span>${escapeHtml(s)}</span>
-      <div>
-        <button class='btn btn-neutral session-load' data-file='${escapeHtml(s)}'>Load</button>
-        <button class='btn btn-danger session-delete' data-file='${escapeHtml(s)}'>x</button>
-      </div>
-    </div>
-  `).join('');
+  if (!r.ok || !Array.isArray(sessions)) {
+    renderSavedLibrary([]);
+    toast(sessions.user_message || 'Failed to load saved library.');
+    return;
+  }
+  const items = await Promise.all(sessions.map(async file => {
+    const response = await fetch(`/api/sessions/${encodeURIComponent(file)}`);
+    const payload = await response.json();
+    return normalizeSavedArtifact(file, payload);
+  }));
+  renderSavedLibrary(items);
 }
 
 async function loadToolsForPlayground() {
@@ -848,7 +1331,6 @@ function bindTabs() {
       $(`#${target}`).classList.remove('hidden');
       const footer = $('.side-footer');
       if (footer) footer.style.display = target === 'setup' ? 'flex' : 'none';
-      if (window.innerWidth <= 768) closeSidebar();
 
       if (target === 'work') await refreshTree();
       if (target === 'playground') await loadToolsForPlayground();
@@ -884,10 +1366,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     const name = $('#bot-title').value.trim();
     if (!name) return;
 
+    beginNewSetup();
     agents.push({
       name: name.replace(/[^a-zA-Z0-9_]/g, '_'),
       system: $('#bot-description').value,
-      temperature: 0.3
+      temperature: 0.3,
+      tools_enabled: true,
+      relationships: []
     });
 
     $('#bot-title').value = '';
@@ -896,10 +1381,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     saveSession();
   };
 
+  $('#random-scenario').onclick = rollScenarioIdea;
+
   $('#generate-agents').onclick = async () => {
     const scenario = $('#scenario').value.trim();
     if (!scenario) return;
+    const selectedModel = $('#model').value;
+    if (!selectedModel) {
+      toast('Models are still loading. Try again in a moment.');
+      return;
+    }
 
+    beginNewSetup();
     const btn = $('#generate-agents');
     btn.disabled = true;
     btn.textContent = 'Generating...';
@@ -910,21 +1403,26 @@ document.addEventListener('DOMContentLoaded', async () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           scenario,
-          model: $('#model').value,
-          num_agents: parseInt($('#num-agents').value, 10)
+          model: selectedModel,
+          num_agents: parseInt($('#num-agents').value, 10),
+          conversation_mode: $('#conversation-mode').value
         })
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.user_message || d.error || 'Generation failed');
 
-      agents = d.agents || [];
+      agents = normalizeAgents(d.agents);
       if (d.goal) $('#goal').value = d.goal;
+      if (d.conversation_mode) {
+        $('#conversation-mode').value = normalizeConversationMode(d.conversation_mode);
+        updateConversationModeHint();
+      }
       renderTeam();
       saveSession();
     } catch (e) {
       toast(e.message || 'Failed to generate agents.');
     } finally {
-      btn.disabled = false;
+      btn.disabled = !$('#model').value;
       btn.textContent = 'Generate Scenario';
     }
   };
@@ -948,33 +1446,39 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   $('#sessions').onclick = openSessionsModal;
   $('#sessions-close').onclick = () => { $('#sessions-modal').style.display = 'none'; };
-  $('#session-save').onclick = saveCurrentSessionToServer;
+  $('#scenario-save').onclick = () => saveLibraryItem('scenario');
+  $('#group-save').onclick = () => saveLibraryItem('group');
   $('#sessions-list').onclick = async (e) => {
     const file = e.target.dataset.file;
     if (!file) return;
 
     if (e.target.classList.contains('session-load')) {
-      const r = await fetch(`/api/sessions/${file}`);
-      const d = await r.json();
-      agents = d.agents || [];
-      $('#goal').value = d.goal || '';
-      if (d.settings) {
-        if (d.settings.model) $('#model').value = d.settings.model;
-        if (d.settings.mode) $('#mode').value = d.settings.mode;
-        if (d.settings.turns) $('#turns').value = d.settings.turns;
-        if (d.settings.temperature) $('#temperature').value = d.settings.temperature;
-        if (d.settings.allow_tools !== undefined) $('#allow-tools').checked = d.settings.allow_tools;
-        setHumanProxyMode(d.settings.human_proxy_mode);
-        if (d.settings.human_proxy_preferences !== undefined) $('#human-proxy-preferences').value = d.settings.human_proxy_preferences;
+      const r = await fetch(`/api/sessions/${encodeURIComponent(file)}`);
+      const raw = await r.json();
+      if (!r.ok) {
+        toast(raw.user_message || 'Failed to load saved item.');
+        return;
+      }
+      const item = normalizeSavedArtifact(file, raw);
+      const d = item.payload;
+      beginNewSetup();
+      agents = normalizeAgents(d.agents);
+      if (item.artifactType === 'scenario') {
+        await activateScenarioWorkspace(d.workspace_session || null, Boolean(d.workspace_session));
+        $('#scenario').value = d.scenario || '';
+        $('#goal').value = d.goal || '';
+        applyRunSettings(d.settings);
+        restoreSavedTranscript(d.transcript);
       }
       renderTeam();
       saveSession();
       $('#sessions-modal').style.display = 'none';
+      toast(item.artifactType === 'group' ? 'Agent group loaded. Current task preserved.' : 'Scenario loaded.');
     }
 
     if (e.target.classList.contains('session-delete')) {
       if (await showConfirm({ title: 'Delete Session', message: `Delete ${file}?`, okText: 'Delete' })) {
-        await fetch(`/api/sessions/${file}`, { method: 'DELETE' });
+        await fetch(`/api/sessions/${encodeURIComponent(file)}`, { method: 'DELETE' });
         await openSessionsModal();
       }
     }
@@ -996,6 +1500,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const d = await r.json();
     if (r.ok) {
+      workspaceSession = null;
+      updateWorkspaceLabel();
       toast('Workspace mounted successfully.');
       await refreshTree();
     } else {
@@ -1063,10 +1569,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('#thinkmin').onclick = toggleThinkMinimize;
   $('#thinkclose').onclick = closeThinkDock;
   $('#stop-run').onclick = stopSimulation;
+  $('#resume-run').onclick = resumeSimulation;
   $('#jump-latest').onclick = () => scrollChatToLatest($('#chat'));
 
+  $('#scenario').addEventListener('input', beginNewSetup);
+  $('#scenario').addEventListener('change', saveSession);
+  $('#goal').addEventListener('input', beginNewSetup);
   $('#goal').addEventListener('change', saveSession);
   $('#mode').addEventListener('change', saveSession);
+  $('#conversation-mode').addEventListener('change', () => {
+    updateConversationModeHint();
+    saveSession();
+  });
   $('#turns').addEventListener('change', saveSession);
   $('#temperature').addEventListener('change', saveSession);
   $('#model').addEventListener('change', saveSession);
@@ -1097,12 +1611,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
   }
 
-  applySavedSettings();
-  clearDraftKeepSettings();
   await loadOllamaSettings();
+  if (!await reconnectActiveRun()) {
+    clearDraftSetup();
+    await activateScenarioWorkspace();
+    renderTeam();
+    renderEmptyChat();
+    setStatus('idle');
+    buttons(false);
+  }
+  $('#random-scenario').disabled = false;
   await loadModels();
   renderTeam();
   updateHumanProxyPreferencesVisibility();
-  setStatus('idle');
-  buttons(false);
+  updateConversationModeHint();
+  updateWorkspaceLabel();
 });
