@@ -855,6 +855,12 @@ function getSavedSettings() {
 }
 
 async function loadModels() {
+  const generateButton = $('#generate-agents');
+  if (generateButton) {
+    generateButton.disabled = true;
+    generateButton.textContent = 'Loading Models...';
+  }
+  $('#model-hint').textContent = 'Loading available models...';
   const r = await fetch('/api/models');
   const models = await r.json();
   const sel = $('#model');
@@ -887,6 +893,10 @@ async function loadModels() {
     sel.value = values.find(v => v.includes('gemini-2.5-flash-lite'));
   } else if (values.length > 0) {
     sel.value = values[0];
+  }
+  if (generateButton) {
+    generateButton.disabled = !sel.value;
+    generateButton.textContent = 'Generate Scenario';
   }
 }
 
@@ -1197,6 +1207,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('#generate-agents').onclick = async () => {
     const scenario = $('#scenario').value.trim();
     if (!scenario) return;
+    const selectedModel = $('#model').value;
+    if (!selectedModel) {
+      toast('Models are still loading. Try again in a moment.');
+      return;
+    }
 
     beginNewSetup();
     const btn = $('#generate-agents');
@@ -1209,7 +1224,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           scenario,
-          model: $('#model').value,
+          model: selectedModel,
           num_agents: parseInt($('#num-agents').value, 10),
           conversation_mode: $('#conversation-mode').value
         })
@@ -1224,7 +1239,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (e) {
       toast(e.message || 'Failed to generate agents.');
     } finally {
-      btn.disabled = false;
+      btn.disabled = !$('#model').value;
       btn.textContent = 'Generate Scenario';
     }
   };

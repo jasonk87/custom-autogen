@@ -314,13 +314,13 @@ async def choose_next():
 async def scenario_generate():
     data = await request.get_json()
     scenario = (data or {}).get("scenario")
-    model = (data or {}).get("model")
+    model = (data or {}).get("model") or DEFAULT_MODEL
     num_agents = (data or {}).get("num_agents", 3)
     conversation_mode = (data or {}).get("conversation_mode", "discussion")
 
     if not scenario or not isinstance(scenario, str):
         return jsonify(OrchestratorError("Missing or invalid 'scenario' in request.", "Scenario is missing or not a string.", "invalid_scenario_input").to_payload()), 400
-    if not model or not isinstance(model, str):
+    if not isinstance(model, str):
         return jsonify(OrchestratorError("Missing or invalid 'model' in request.", "Model is missing or not a string.", "invalid_model_input").to_payload()), 400
     if not isinstance(num_agents, int) or num_agents <= 0:
         return jsonify(OrchestratorError("Invalid 'num_agents' in request.", "num_agents must be a positive integer.", "invalid_num_agents_input").to_payload()), 400

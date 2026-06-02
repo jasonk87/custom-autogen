@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from app.server import _run_orchestrator_thread, app
 from app.state import ReplayEventBuffer, state
 from app.core import OrchestratorError, run_orchestrator
-from app.config import MAX_UPLOAD_BYTES, ALLOWED_UPLOAD_MIMES, SESSIONS_DIR, WORKSPACE_DIR
+from app.config import DEFAULT_MODEL, MAX_UPLOAD_BYTES, ALLOWED_UPLOAD_MIMES, SESSIONS_DIR, WORKSPACE_DIR
 import os
 import shutil
 from werkzeug.datastructures import FileStorage
@@ -87,8 +87,6 @@ async def test_coach_input_rejects_empty_message(client):
     (None, "gemini-pro", 3, 400, "invalid_scenario_input"),
     ("", "gemini-pro", 3, 400, "invalid_scenario_input"),
     (123, "gemini-pro", 3, 400, "invalid_scenario_input"),
-    ("test scenario", None, 3, 400, "invalid_model_input"),
-    ("test scenario", "", 3, 400, "invalid_model_input"),
     ("test scenario", 123, 3, 400, "invalid_model_input"),
     ("test scenario", "gemini-pro", "abc", 400, "invalid_num_agents_input"),
     ("test scenario", "gemini-pro", 0, 400, "invalid_num_agents_input"),
@@ -114,6 +112,19 @@ async def test_scenario_generate_success(client):
         assert data.get("agents") == [{"name": "Agent1"}]
         assert data.get("goal") == "Suggested Goal"
         mock_generate.assert_called_once_with("create a website", "gemini-pro", 2, "discussion")
+
+
+@pytest.mark.parametrize("model", [None, ""])
+async def test_scenario_generate_defaults_missing_or_empty_model(client, model):
+    with mock.patch("app.server.generate_agents_from_scenario") as mock_generate:
+        mock_generate.return_value = ([{"name": "Agent1"}], "Suggested Goal")
+        resp = await client.post(
+            "/api/scenario/generate",
+            json={"scenario": "create a website", "model": model, "num_agents": 2},
+        )
+
+    assert resp.status_code == 200
+    mock_generate.assert_called_once_with("create a website", DEFAULT_MODEL, 2, "discussion")
 
 
 async def test_scenario_generate_retries_transient_provider_error(client):

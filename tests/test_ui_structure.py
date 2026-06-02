@@ -42,6 +42,7 @@ async def test_index_html_structure():
     assert 'Scenarios and Groups' in html
     assert 'id="scenario-save"' in html
     assert 'id="group-save"' in html
+    assert 'id="generate-agents" class="btn btn-primary" style="width:100%" disabled>Loading Models...</button>' in html
 
     # Check that Ollama settings are gone
     assert 'Ollama Base URL' not in html
@@ -78,6 +79,8 @@ def test_stream_errors_reconnect_to_active_run():
     assert "$('#scenario').addEventListener('change', saveSession)" in script
     assert "loadSession();" in script
     assert "conversation_mode: $('#conversation-mode').value" in script
+    assert "generateButton.textContent = 'Loading Models...'" in script
+    assert "Models are still loading. Try again in a moment." in script
     assert "function normalizeConversationMode(mode)" in script
     assert "$('#conversation-mode').addEventListener('change'" in script
     assert "const RELATIONSHIP_TYPES = [" in script
