@@ -33,6 +33,11 @@ async def client():
 def setup_test_environment(tmp_path):
     # Ensure a clean state for each test
     state.active_workspace = str(tmp_path)
+    state.active_workspace_session = None
+    state.active_workspace_persistent = False
+    managed_root = Path(WORKSPACE_DIR) / "sessions"
+    managed_root.mkdir(parents=True, exist_ok=True)
+    existing_managed_workspaces = {item.name for item in managed_root.iterdir() if item.is_dir()}
     if os.path.exists(SESSIONS_DIR):
         shutil.rmtree(SESSIONS_DIR)
     os.makedirs(SESSIONS_DIR, exist_ok=True)
@@ -40,6 +45,9 @@ def setup_test_environment(tmp_path):
     # Clean up after tests
     if os.path.exists(SESSIONS_DIR):
         shutil.rmtree(SESSIONS_DIR)
+    for item in managed_root.iterdir():
+        if item.is_dir() and item.name not in existing_managed_workspaces:
+            shutil.rmtree(item)
 
 async def test_agent_run_smoke(client):
     """
@@ -839,6 +847,36 @@ async def test_sessions_activate_success(client):
     expected_path = str((Path(WORKSPACE_DIR) / "sessions" / session_name).resolve())
     assert data.get("workspace") == expected_path
     assert state.active_workspace == expected_path
+
+
+async def test_scenario_workspace_activation_replaces_disposable_workspace(client):
+    first = await client.post("/api/workspace/scenario", json={})
+    assert first.status_code == 200
+    first_data = await first.get_json()
+    first_path = Path(first_data["workspace"])
+    (first_path / "draft.txt").write_text("temporary", encoding="utf-8")
+
+    second = await client.post("/api/workspace/scenario", json={})
+    assert second.status_code == 200
+    second_data = await second.get_json()
+
+    assert second_data["workspace_session"] != first_data["workspace_session"]
+    assert not first_path.exists()
+    assert Path(second_data["workspace"]).exists()
+
+
+async def test_saved_scenario_retains_active_workspace(client):
+    activated = await client.post("/api/workspace/scenario", json={})
+    workspace = await activated.get_json()
+    resp = await client.post(
+        "/api/sessions",
+        json={"name": "retained", "artifact_type": "scenario", "agents": [{"name": "A"}]},
+    )
+
+    assert resp.status_code == 201
+    saved = json.loads((Path(SESSIONS_DIR) / "scenario_retained.json").read_text(encoding="utf-8"))
+    assert saved["workspace_session"] == workspace["workspace_session"]
+    assert state.active_workspace_persistent is True
 
 # --- New tests for /api/sessions (GET) ---
 

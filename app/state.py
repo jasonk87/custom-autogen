@@ -67,6 +67,8 @@ class AppState:
     manual_next_q: "queue.Queue[Optional[str]]" = field(default_factory=queue.Queue)
     is_running: bool = False
     active_workspace: str = WORKSPACE_DIR
+    active_workspace_session: Optional[str] = None
+    active_workspace_persistent: bool = False
     current_run_id: Optional[str] = None
     current_client_run_token: Optional[str] = None
     current_output_buffer: Optional[ReplayEventBuffer] = None

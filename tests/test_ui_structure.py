@@ -19,6 +19,7 @@ async def test_index_html_structure():
     assert 'id="resume-run"' in html
     assert 'id="jump-latest"' in html
     assert 'id="work"' in html
+    assert 'id="workspace-session-label"' in html
 
     # Check for new consolidated sections
     assert '<details' in html
@@ -70,7 +71,7 @@ def test_stream_errors_reconnect_to_active_run():
     assert "function clearDraftSetup()" in script
     assert "$('#scenario').addEventListener('input', beginNewSetup)" in script
     assert "$('#goal').addEventListener('input', beginNewSetup)" in script
-    assert "clearDraftSetup();\n    renderTeam();" in script
+    assert "clearDraftSetup();\n    await activateScenarioWorkspace();\n    renderTeam();" in script
     assert "/api/run/status?run_token=" in script
     assert "localStorage.removeItem(ACTIVE_RUN_URL_KEY)" in script
     assert "es.close();\n        localStorage.removeItem(ACTIVE_RUN_URL_KEY);" in script
@@ -101,6 +102,10 @@ def test_stream_errors_reconnect_to_active_run():
     assert "fetch('/api/models/ollama')" in script
     assert "renderModelOptions(models, { preserveSelection: true })" in script
     assert "function normalizeConversationMode(mode)" in script
+    assert "async function activateScenarioWorkspace(savedWorkspaceSession = null, persistent = false)" in script
+    assert "Continue the previously saved scenario from the transcript below." in script
+    assert "restoreSavedTranscript(d.transcript);" in script
+    assert "payload.transcript = window.__transcript || [];" in script
     assert "$('#conversation-mode').addEventListener('change'" in script
     assert "const RELATIONSHIP_TYPES = [" in script
     assert "function normalizeAgents(rawAgents = [])" in script
@@ -113,3 +118,8 @@ def test_stream_errors_reconnect_to_active_run():
     assert "$$('.relationship-custom').forEach(el => {" in script
     assert "el.oninput = () => {" in script
     assert "conversation_mode: $('#conversation-mode').value" in script
+
+
+def test_mobile_latest_messages_button_sits_above_simulation_controls():
+    styles = Path("static/css/style.css").read_text(encoding="utf-8")
+    assert "bottom: calc(152px + env(safe-area-inset-bottom));" in styles

@@ -1303,6 +1303,29 @@ summary:hover {
   font-weight: 700;
 }
 
+.workspace-context {
+  display: grid;
+  gap: 3px;
+  padding: 11px 12px;
+  border: 1px solid hsla(var(--primary-hsl), 0.3);
+  border-radius: 10px;
+  background: hsla(var(--primary-hsl), 0.08);
+}
+
+.workspace-context span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.workspace-context strong {
+  color: #bfdbfe;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .library-card {
   width: min(92vw, 760px);
   max-height: min(88vh, 760px);
@@ -1493,7 +1516,7 @@ summary:hover {
 
   #jump-latest {
     right: 16px;
-    bottom: calc(104px + env(safe-area-inset-bottom));
+    bottom: calc(152px + env(safe-area-inset-bottom));
   }
 
   .chat-empty {

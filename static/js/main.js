@@ -7,6 +7,8 @@ let es = null;
 let runActive = false;
 let runCanResume = false;
 let currentStatus = 'idle';
+let workspaceSession = null;
+let loadedScenarioTranscript = [];
 const think = { active: false, buffer: '', open: false, minimized: false };
 const playgroundState = { toolNames: [] };
 const SESSION_KEY = 'agentStudioSession';
@@ -247,6 +249,24 @@ function workspaceUrl(path) {
 
 function humanProxyMode() {
   return $('input[name="human-proxy-mode"]:checked')?.value || 'consult';
+}
+
+function updateWorkspaceLabel() {
+  const label = $('#workspace-session-label');
+  if (label) label.textContent = workspaceSession || 'Custom mounted workspace';
+}
+
+async function activateScenarioWorkspace(savedWorkspaceSession = null, persistent = false) {
+  const r = await fetch('/api/workspace/scenario', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspace_session: savedWorkspaceSession, persistent })
+  });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.user_message || 'Failed to activate scenario workspace.');
+  workspaceSession = d.workspace_session;
+  updateWorkspaceLabel();
+  return d;
 }
 
 function normalizeAgents(rawAgents = []) {
@@ -667,9 +687,11 @@ function clearDraftSetup() {
   $('#goal').value = '';
 }
 
-function startNewTask() {
+async function startNewTask() {
   beginNewSetup();
   clearDraftSetup();
+  loadedScenarioTranscript = [];
+  await activateScenarioWorkspace();
   renderTeam();
   renderEmptyChat();
   closeThinkDock();
@@ -771,9 +793,13 @@ async function startRun() {
 
   $('#chat').innerHTML = '';
   runCanResume = false;
+  const originalGoal = $('#goal').value || '';
+  const continuation = loadedScenarioTranscript.length
+    ? `${originalGoal}\n\nContinue the previously saved scenario from the transcript below. Do not restart introductions or repeat completed work. Continue naturally from the latest point.\n\nSaved transcript:\n${loadedScenarioTranscript.map(item => `${item.from}: ${item.text}`).join('\n\n')}`
+    : originalGoal;
   const params = new URLSearchParams({
     model: $('#model').value,
-    goal: btoa($('#goal').value || ''),
+    goal: btoa(continuation),
     agents: btoa(JSON.stringify(agents)),
     manager_mode: $('#mode').value,
     conversation_mode: $('#conversation-mode').value,
@@ -827,7 +853,8 @@ function saveSession() {
     scenario: $('#scenario').value,
     goal: $('#goal').value,
     agents,
-    settings: currentRunSettings()
+    settings: currentRunSettings(),
+    workspace_session: workspaceSession
   };
   localStorage.setItem(SESSION_KEY, JSON.stringify(s));
 }
@@ -871,7 +898,20 @@ function loadSession() {
   agents = normalizeAgents(s.agents);
   $('#scenario').value = s.scenario || '';
   $('#goal').value = s.goal || '';
+  workspaceSession = s.workspace_session || workspaceSession;
+  updateWorkspaceLabel();
   applyRunSettings(s.settings);
+}
+
+function restoreSavedTranscript(transcript = []) {
+  loadedScenarioTranscript = Array.isArray(transcript) ? transcript : [];
+  window.__transcript = [];
+  if (!loadedScenarioTranscript.length) {
+    renderEmptyChat();
+    return;
+  }
+  $('#chat').innerHTML = '';
+  loadedScenarioTranscript.forEach(item => addMsg(item.from || 'Unknown', item.text || ''));
 }
 
 function getSavedSettings() {
@@ -985,6 +1025,7 @@ async function rollScenarioIdea() {
     if (!r.ok) throw new Error(d.user_message || d.error || 'Idea generation failed.');
 
     beginNewSetup();
+    await activateScenarioWorkspace();
     agents = [];
     $('#scenario').value = d.scenario || '';
     $('#goal').value = '';
@@ -1098,6 +1139,7 @@ async function saveLibraryItem(artifactType) {
     payload.scenario = $('#scenario').value;
     payload.goal = $('#goal').value;
     payload.settings = currentRunSettings();
+    payload.transcript = window.__transcript || [];
   }
 
   const r = await fetch('/api/sessions', {
@@ -1378,9 +1420,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       beginNewSetup();
       agents = normalizeAgents(d.agents);
       if (item.artifactType === 'scenario') {
+        await activateScenarioWorkspace(d.workspace_session || null, Boolean(d.workspace_session));
         $('#scenario').value = d.scenario || '';
         $('#goal').value = d.goal || '';
         applyRunSettings(d.settings);
+        restoreSavedTranscript(d.transcript);
       }
       renderTeam();
       saveSession();
@@ -1412,6 +1456,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const d = await r.json();
     if (r.ok) {
+      workspaceSession = null;
+      updateWorkspaceLabel();
       toast('Workspace mounted successfully.');
       await refreshTree();
     } else {
@@ -1524,6 +1570,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadOllamaSettings();
   if (!await reconnectActiveRun()) {
     clearDraftSetup();
+    await activateScenarioWorkspace();
     renderTeam();
     renderEmptyChat();
     setStatus('idle');
@@ -1534,4 +1581,5 @@ document.addEventListener('DOMContentLoaded', async () => {
   renderTeam();
   updateHumanProxyPreferencesVisibility();
   updateConversationModeHint();
+  updateWorkspaceLabel();
 });

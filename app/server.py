@@ -59,6 +59,38 @@ def _workspace_root() -> str:
     return getattr(state, "active_workspace", WORKSPACE_DIR) or WORKSPACE_DIR
 
 
+def _managed_workspaces_root() -> Path:
+    return (Path(WORKSPACE_DIR) / "sessions").resolve()
+
+
+def _managed_workspace_path(name: str) -> Path:
+    root = _managed_workspaces_root()
+    target = (root / secure_filename(name)).resolve()
+    if os.path.commonpath([str(root), str(target)]) != str(root):
+        raise PermissionError("access_denied")
+    return target
+
+
+def _cleanup_disposable_workspace() -> None:
+    session_name = getattr(state, "active_workspace_session", None)
+    if not session_name or getattr(state, "active_workspace_persistent", False) or state.is_running:
+        return
+    target = _managed_workspace_path(session_name)
+    if target.exists():
+        shutil.rmtree(target)
+
+
+def _activate_managed_workspace(name: str, persistent: bool = False, cleanup_previous: bool = True) -> str:
+    if cleanup_previous:
+        _cleanup_disposable_workspace()
+    target = _managed_workspace_path(name)
+    target.mkdir(parents=True, exist_ok=True)
+    state.active_workspace = str(target)
+    state.active_workspace_session = secure_filename(name)
+    state.active_workspace_persistent = persistent
+    return str(target)
+
+
 def _is_transient_provider_error(error: BaseException | str) -> bool:
     message = str(error).lower()
     return any(
@@ -589,7 +621,23 @@ async def api_set_directory():
         return jsonify(OrchestratorError(f"Path '{path}' is not a directory.", f"Path {target_path} is not a directory.", "not_a_directory").to_payload()), 400
 
     state.active_workspace = target_path
+    state.active_workspace_session = None
+    state.active_workspace_persistent = True
     return jsonify({"ok": True, "workspace": target_path})
+
+
+@app.post("/api/workspace/scenario")
+async def api_activate_scenario_workspace():
+    data = await request.get_json() or {}
+    requested_name = secure_filename(str(data.get("workspace_session") or "")).strip()
+    session_name = requested_name or f"task_{uuid.uuid4().hex}"
+    try:
+        workspace = _activate_managed_workspace(session_name, persistent=bool(data.get("persistent")))
+        return jsonify({"ok": True, "workspace": workspace, "workspace_session": session_name})
+    except PermissionError:
+        return jsonify(OrchestratorError("Access denied to scenario workspace.", "Scenario workspace escaped the managed root.", "access_denied").to_payload()), 403
+    except OSError as e:
+        return jsonify(OrchestratorError("Failed to activate scenario workspace.", str(e), "workspace_activation_error").to_payload()), 500
 
 
 @app.post("/api/workspace/new_folder")
@@ -694,15 +742,16 @@ async def sessions_activate():
     if not name:
         return jsonify(OrchestratorError("Missing 'name' for session activation.", "Session name is missing or empty.", "missing_session_name").to_payload()), 400
 
-    sessions_root = Path(WORKSPACE_DIR) / "sessions"
-    session_dir = (sessions_root / name).resolve()
-    if os.path.commonpath([str(sessions_root.resolve()), str(session_dir)]) != str(sessions_root.resolve()):
+    try:
+        sessions_root = _managed_workspaces_root()
+        session_dir = _managed_workspace_path(name)
+    except PermissionError:
+        return jsonify(OrchestratorError("Access denied to session path.", f"Attempted to activate session {name} outside of sessions root.", "access_denied").to_payload()), 403
+    if os.path.commonpath([str(sessions_root), str(session_dir)]) != str(sessions_root):
         return jsonify(OrchestratorError("Access denied to session path.", f"Attempted to activate session at {session_dir} outside of sessions root.", "access_denied").to_payload()), 403
 
     try:
-        sessions_root.mkdir(parents=True, exist_ok=True)
-        session_dir.mkdir(parents=True, exist_ok=True)
-        state.active_workspace = str(session_dir)
+        _activate_managed_workspace(name, persistent=True)
         return jsonify({"ok": True, "workspace": state.active_workspace, "session": name})
     except OSError as e:
         log.error("session_activate_os_error", extra={"session_name": name, "error": str(e)}, exc_info=e)
@@ -752,6 +801,9 @@ async def sessions_save():
     filename = f"{artifact_type}_{name}.json" if artifact_type else f"{name}.json"
     fp = os.path.join(SESSIONS_DIR, filename)
     try:
+        if artifact_type == "scenario" and getattr(state, "active_workspace_session", None):
+            state.active_workspace_persistent = True
+            data["workspace_session"] = state.active_workspace_session
         os.makedirs(SESSIONS_DIR, exist_ok=True)
         with open(fp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
@@ -767,7 +819,29 @@ async def sessions_delete(name: str):
     if not os.path.exists(fp):
         return jsonify(OrchestratorError(f"Session '{name}' not found.", f"Session file {fp} not found.", "session_not_found").to_payload()), 404
     try:
+        workspace_session = None
+        try:
+            with open(fp, "r", encoding="utf-8") as f:
+                workspace_session = (json.load(f) or {}).get("workspace_session")
+        except Exception:
+            pass
         os.remove(fp)
+        if workspace_session:
+            referenced = False
+            for saved_name in os.listdir(SESSIONS_DIR):
+                if not saved_name.endswith(".json"):
+                    continue
+                try:
+                    with open(os.path.join(SESSIONS_DIR, saved_name), "r", encoding="utf-8") as f:
+                        if (json.load(f) or {}).get("workspace_session") == workspace_session:
+                            referenced = True
+                            break
+                except Exception:
+                    continue
+            if not referenced and workspace_session != getattr(state, "active_workspace_session", None):
+                target = _managed_workspace_path(workspace_session)
+                if target.exists():
+                    shutil.rmtree(target)
         return jsonify({"ok": True})
     except Exception as e:
         log.error("session_delete_error", extra={"session_name": name, "error": str(e)}, exc_info=e)
