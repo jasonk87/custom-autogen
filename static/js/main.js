@@ -618,8 +618,12 @@ function buttons(running, resumable = false) {
     actions.innerHTML = "<button id='stop' class='btn btn-danger' style='width:100%'>Stop Task</button>";
     $('#stop').onclick = stopSimulation;
   } else if (resumable) {
-    actions.innerHTML = "<button id='resume' class='btn btn-success' style='width:100%'>Resume Task</button>";
+    actions.innerHTML = `
+      <button id='resume' class='btn btn-success' style='width:100%'>Resume Task</button>
+      <button id='new-task' class='btn btn-neutral' style='width:100%'>New Task</button>
+    `;
     $('#resume').onclick = resumeSimulation;
+    $('#new-task').onclick = startNewTask;
   } else {
     actions.innerHTML = "<button id='start' class='btn btn-primary' style='width:100%'>Start Task</button>";
     $('#start').onclick = startRun;
@@ -643,6 +647,14 @@ function clearDraftSetup() {
   agents = [];
   $('#scenario').value = '';
   $('#goal').value = '';
+}
+
+function startNewTask() {
+  beginNewSetup();
+  clearDraftSetup();
+  renderTeam();
+  closeThinkDock();
+  toast('Ready for a new task.');
 }
 
 async function stopSimulation() {
